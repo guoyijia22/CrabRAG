@@ -1,0 +1,18 @@
+# Local secrets
+config/.env
+
+# Runtime state and generated data
+data/
+logs/
+
+# Bundled portable runtimes
+runtime/
+
+# Python caches and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

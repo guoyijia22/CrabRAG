@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any
+
+import chromadb
+
+from services.rag_api.config import get_settings
+from services.rag_api.document.categories import source_files_for_category
+from services.rag_api.llm.siliconflow_client import embed_texts
+from services.rag_api.rag_settings import load_rag_settings
+
+EMBEDDING_BATCH_SIZE = 64
+_COLLECTION_OVERRIDE: ContextVar[str | None] = ContextVar("collection_name_override", default=None)
+
+
+def get_collection():
+    settings = get_settings()
+    settings.chroma_dir.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(settings.chroma_dir))
+    return client.get_or_create_collection(name=_collection_name(), metadata={"hnsw:space": "cosine"})
+
+
+def reset_collection():
+    settings = get_settings()
+    settings.chroma_dir.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(settings.chroma_dir))
+    try:
+        client.delete_collection(_collection_name())
+    except Exception:
+        pass
+    return client.get_or_create_collection(name=_collection_name(), metadata={"hnsw:space": "cosine"})
+
+
+def add_chunks(chunks: list[dict]) -> int:
+    if not chunks:
+        return 0
+    documents = [chunk["content"] for chunk in chunks]
+    embeddings = _embed_in_batches(documents)
+    collection = reset_collection()
+    collection.add(
+        ids=[chunk["id"] for chunk in chunks],
+        documents=documents,
+        embeddings=embeddings,
+        metadatas=[chunk["metadata"] for chunk in chunks],
+    )
+    return len(chunks)
+
+
+def _embed_in_batches(documents: list[str]) -> list[list[float]]:
+    embeddings: list[list[float]] = []
+    for start in range(0, len(documents), EMBEDDING_BATCH_SIZE):
+        batch = documents[start : start + EMBEDDING_BATCH_SIZE]
+        embeddings.extend(embed_texts(batch))
+    return embeddings
+
+
+def collection_status() -> dict[str, Any]:
+    collection = get_collection()
+    return {"collection": _collection_name(), "count": collection.count(), "path": str(get_settings().chroma_dir)}
+
+
+@contextmanager
+def override_collection_name(collection_name: str | None):
+    token = _COLLECTION_OVERRIDE.set(collection_name)
+    try:
+        yield
+    finally:
+        _COLLECTION_OVERRIDE.reset(token)
+
+
+def _collection_name() -> str:
+    return _COLLECTION_OVERRIDE.get() or get_settings().collection_name
+
+
+def search_chunks(query: str, intent: str, entities: list[str] | None = None, top_k: int = 2, min_score: float | None = None, candidate_k: int | None = None) -> list[dict]:
+    rag_settings = load_rag_settings()
+    if rag_settings.rag_param_tuning_enabled:
+        min_score = rag_settings.min_score if min_score is None else min_score
+        candidate_k = max(rag_settings.vector_candidate_k, top_k * 4) if candidate_k is None else candidate_k
+    else:
+        min_score = 0.35 if min_score is None else min_score
+        candidate_k = max(top_k * 4, 6) if candidate_k is None else candidate_k
+    entities = entities or []
+    collection = get_collection()
+    if collection.count() == 0:
+        return []
+    query_embedding = embed_texts([query])[0]
+    result = collection.query(query_embeddings=[query_embedding], n_results=max(candidate_k, top_k), include=["documents", "metadatas", "distances"])
+    candidates: list[dict] = []
+    for doc, meta, distance in zip(result.get("documents", [[]])[0], result.get("metadatas", [[]])[0], result.get("distances", [[]])[0]):
+        vector_score = max(0.0, 1.0 - float(distance))
+        intent_score = 1.0 if meta.get("category") == intent else 0.0
+        entity_score = _entity_match_score(doc, entities)
+        source_priority_score = _source_priority_score(meta.get("source_file", ""), intent)
+        final_score = 0.65 * vector_score + 0.20 * intent_score + 0.10 * entity_score + 0.05 * source_priority_score
+        if final_score >= min_score:
+            candidates.append(_chunk_payload(doc, meta, final_score, "vector"))
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+    return candidates[:candidate_k]
+
+
+def search_all_chunks() -> list[dict]:
+    collection = get_collection()
+    if collection.count() == 0:
+        return []
+    result = collection.get(include=["documents", "metadatas"])
+    return [_chunk_payload(doc, meta, 0.0, "all") for doc, meta in zip(result.get("documents", []), result.get("metadatas", []))]
+
+
+def search_chunks_by_keywords(query: str, intent: str, entities: list[str] | None = None, top_k: int = 2) -> list[dict]:
+    chunks = search_all_chunks()
+    entities = entities or []
+    query_terms = set(entities + [intent])
+    query_terms.update(term for term in ["欠费", "地址迁移", "带宽变更", "一票否决", "中断", "报修", "销户", "资费", "材料", "审核"] if term in query)
+    candidates: list[dict] = []
+    for chunk in chunks:
+        doc = chunk.get("content", "")
+        meta_category = chunk.get("category", "")
+        score = 0.45
+        score += 0.2 if meta_category == intent else 0
+        score += min(0.3, sum(1 for term in query_terms if term and term in doc) * 0.08)
+        score += _source_priority_score(chunk.get("source_file", ""), intent) * 0.05
+        if score >= 0.35:
+            candidates.append({**chunk, "score": round(score, 4), "retrieval_channel": "keyword"})
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+    return candidates[:top_k]
+
+
+def _chunk_payload(doc: str, meta: dict, score: float, channel: str) -> dict:
+    return {
+        "content": doc,
+        "source_file": meta.get("source_file", ""),
+        "source_path": meta.get("source_path", ""),
+        "category": meta.get("category", ""),
+        "section_title": meta.get("section_title", ""),
+        "granularity": meta.get("granularity", "chunk"),
+        "parent_chunk_id": meta.get("parent_chunk_id", ""),
+        "score": round(score, 4),
+        "retrieval_channel": channel,
+    }
+
+
+def _entity_match_score(text: str, entities: list[str]) -> float:
+    if not entities:
+        return 0.0
+    return min(1.0, sum(1 for entity in entities if entity in text) / max(1, len(entities)))
+
+
+def _source_priority_score(source_file: str, intent: str) -> float:
+    if not source_file or not intent:
+        return 0.0
+    return 1.0 if source_file in source_files_for_category(intent) else 0.0

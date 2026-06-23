@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+openai
+langgraph
+langchain
+chromadb
+python-docx
+PyMuPDF
+Pillow
+charset-normalizer
+pydantic
+pydantic-settings
+requests
+numpy
+pytest
