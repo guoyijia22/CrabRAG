@@ -292,6 +292,9 @@ def test_frontend_english_language_covers_async_static_labels():
     bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
 
     expected_translations = {
+        "内置基础图谱": "Built-in base graph",
+        "暂无知识图谱": "No knowledge graph",
+        "问答命中子图": "Q&A matched subgraph",
         "知识库动态图谱": "Dynamic knowledge graph",
         "根据知识库分类生成的兜底结构，建议展示实体类型、业务类别、来源文件、证据数量和关系来源。": "Fallback structure generated from knowledge-base categories. Show entity types, business categories, source files, evidence counts, and relation sources.",
         "已加载当前设置": "Settings loaded",

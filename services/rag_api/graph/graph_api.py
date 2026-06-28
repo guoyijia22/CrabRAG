@@ -15,6 +15,11 @@ def build_graph_payload() -> dict[str, Any]:
     graph_source_files = _graph_source_files(nodes, edges)
     evidence_source_files = _evidence_source_files(edges)
     source_files = graph_source_files or _category_source_files()
+    if graph_source == "static_graph" and not source_files:
+        nodes = []
+        edges = []
+        graph_source = "empty_graph"
+        evidence_source_files = set()
     return {
         "schema": schema,
         "nodes": nodes,
@@ -154,4 +159,5 @@ def _graph_source_label(graph_source: str) -> str:
         "static_graph": "内置基础图谱",
         "dynamic_graph": "知识库动态图谱",
         "subgraph": "问答命中子图",
+        "empty_graph": "暂无知识图谱",
     }.get(graph_source, graph_source or "-")

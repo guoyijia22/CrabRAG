@@ -63,3 +63,21 @@ def test_save_kb_graph_writes_dynamic_graph_payload(tmp_path):
 
     assert saved["nodes"][0]["id"] == "一渠一表"
     assert path.read_text(encoding="utf-8").startswith("{")
+
+
+def test_graph_payload_hides_static_graph_when_no_source_files(monkeypatch):
+    from services.rag_api.graph import graph_api
+    from services.rag_api.graph.graph_store import static_edges, static_nodes
+
+    monkeypatch.setattr(graph_api, "load_raw_graph", lambda path: (static_nodes(), static_edges(), "static_graph"))
+    monkeypatch.setattr(graph_api, "load_kb_categories", lambda: {"items": []})
+
+    payload = graph_api.build_graph_payload()
+
+    assert payload["nodes"] == []
+    assert payload["edges"] == []
+    assert payload["stats"]["node_count"] == 0
+    assert payload["stats"]["edge_count"] == 0
+    assert payload["stats"]["source_file_count"] == 0
+    assert payload["stats"]["graph_source"] == "empty_graph"
+    assert payload["stats"]["graph_source_label"] == "暂无知识图谱"
