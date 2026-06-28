@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Response
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.rag_api.agent.graph import run_qa
-from services.rag_api.app_settings import AppSettings, load_app_settings, save_app_settings
+from services.rag_api.app_settings import AppSettings, SidebarImageUpload, load_app_settings, read_sidebar_image_asset, save_app_settings, save_sidebar_image
 from services.rag_api.config import get_settings, read_app_config, write_system_name
 from services.rag_api.document.categories import load_kb_categories
 from services.rag_api.document.ingest import ingest_knowledge_base
-from services.rag_api.document.ingest_tasks import read_ingest_progress, read_ingest_result, start_ingest_run
+from services.rag_api.document.ingest_tasks import get_active_ingest_progress, read_ingest_progress, read_ingest_result, start_ingest_run
+from services.rag_api.document.loader import has_supported_documents
 from services.rag_api.exceptions import DOC_LOAD_ERROR_MESSAGE, LLM_ERROR_MESSAGE, DocumentLoadError, LLMServiceError
 from services.rag_api.evaluation.storage import list_evaluation_runs, read_evaluation_run
 from services.rag_api.evaluation.tasks import get_active_evaluation_progress, read_evaluation_progress, start_evaluation_run
@@ -24,10 +25,10 @@ from services.rag_api.rag_settings import RagSettings, load_rag_settings, save_r
 from services.rag_api.schemas import ChatRequest, ChatResponse, ConfigUpdateRequest, ModelApiSettingsRequest, ModelApiSettingsResponse, SettingsResponse
 from services.rag_api.vector.chroma_store import collection_status
 
-app = FastAPI(title="enterprise-line-compliance-rag-api")
+app = FastAPI(title="crabrag-api")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:3000", "http://127.0.0.1:5173"],
+    allow_origins=["http://127.0.0.1:3003", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,7 +38,7 @@ app.add_middleware(
 @app.get("/")
 def root() -> dict:
     return {
-        "service": "enterprise-line-compliance-rag-api",
+        "service": "crabrag-api",
         "status": "ok",
         "endpoints": ["/api/health", "/api/chat", "/api/ingest", "/api/categories", "/api/graph", "/api/logs", "/api/settings", "/api/evaluations", "/docs"],
     }
@@ -85,6 +86,11 @@ def run_ingest() -> dict:
     return start_ingest_run()
 
 
+@app.get("/api/ingest/active")
+def active_ingest() -> dict:
+    return get_active_ingest_progress()
+
+
 @app.get("/api/ingest/{run_id}/progress")
 def ingest_progress(run_id: str) -> dict:
     payload = read_ingest_progress(run_id)
@@ -104,6 +110,7 @@ def ingest_result(run_id: str) -> dict:
 @app.get("/api/health")
 def health() -> dict:
     settings = get_settings()
+    docs_dir_exists = any(path.exists() and path.is_dir() for path in settings.docs_dirs)
     chroma_state = "error"
     try:
         status = collection_status()
@@ -113,9 +120,11 @@ def health() -> dict:
     return {
         "web": "ok",
         "rag_service": "ok",
-        "docs_dir_exists": settings.docs_dir.exists(),
+        "docs_dir_exists": docs_dir_exists,
+        "docs_dir_has_files": has_supported_documents(settings.docs_dirs) if docs_dir_exists else False,
+        "docs_dirs": [str(path) for path in settings.docs_dirs],
         "chroma": chroma_state,
-        "llm_api": "configured" if settings.api_key else "missing_api_key",
+        "llm_api": "local_qwen_onnx" if settings.use_local_models else ("configured" if settings.api_key else "missing_api_key"),
     }
 
 
@@ -140,6 +149,20 @@ def update_app_settings(settings: AppSettings) -> AppSettings:
     return save_app_settings(settings)
 
 
+@app.put("/api/app-settings/sidebar-image", response_model=AppSettings)
+def update_sidebar_image(upload: SidebarImageUpload) -> AppSettings:
+    try:
+        return save_sidebar_image(upload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/app-assets/sidebar-image")
+def get_sidebar_image() -> Response:
+    data, content_type = read_sidebar_image_asset()
+    return Response(content=data, media_type=content_type)
+
+
 @app.get("/api/model-settings", response_model=ModelApiSettingsResponse)
 def get_model_settings() -> ModelApiSettingsResponse:
     return public_model_api_settings()
@@ -150,10 +173,16 @@ def update_model_settings(settings: ModelApiSettingsRequest) -> ModelApiSettings
     payload = update_model_api_settings(settings)
     get_settings.cache_clear()
     try:
+        from services.rag_api.llm.local_onnx_embedding import get_local_embedding_model
+        from services.rag_api.llm.local_onnx_rerank import get_local_rerank_model
+        from services.rag_api.llm.local_qwen_llm import shutdown_local_qwen_worker
         from services.rag_api.llm.siliconflow_client import get_chat_client, get_embedding_client
 
         get_chat_client.cache_clear()
         get_embedding_client.cache_clear()
+        get_local_embedding_model.cache_clear()
+        get_local_rerank_model.cache_clear()
+        shutdown_local_qwen_worker()
     except Exception:
         pass
     return payload
@@ -201,7 +230,16 @@ def get_rag_settings() -> RagSettings:
 
 @app.put("/api/settings", response_model=SettingsResponse)
 def update_rag_settings(settings: RagSettings) -> RagSettings:
-    return save_rag_settings(settings)
+    if not get_settings().use_local_models and settings.rerank_provider != "api":
+        settings = settings.model_copy(update={"rerank_provider": "api"})
+    payload = save_rag_settings(settings)
+    try:
+        from services.rag_api.llm.local_onnx_rerank import get_local_rerank_model
+
+        get_local_rerank_model.cache_clear()
+    except Exception:
+        pass
+    return payload
 
 
 @app.post("/api/evaluations/run")

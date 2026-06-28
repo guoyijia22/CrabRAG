@@ -26,23 +26,22 @@ def start_evaluation_run() -> dict:
             _RUNNING_RUN_ID = None
 
         run_id = f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        question_set = generate_evaluation_question_set()
         progress = {
             "run_id": run_id,
             "status": "queued",
             "percent": 0,
             "completed_units": 0,
-            "total_units": get_evaluation_total_units(question_set),
+            "total_units": 0,
             "current_profile": "",
             "current_question": "",
-            "message": "动态题集已生成，等待后台执行",
+            "message": "评测任务已排队，等待后台生成动态题集",
             "started_at": _now(),
             "updated_at": _now(),
             "error": None,
         }
         storage.save_evaluation_progress(progress)
         _RUNNING_RUN_ID = run_id
-        worker = threading.Thread(target=_run_background, args=(run_id, question_set), daemon=True)
+        worker = threading.Thread(target=_run_background, args=(run_id, None), daemon=True)
     worker.start()
     return _with_progress_url(progress)
 
@@ -60,9 +59,6 @@ def get_active_evaluation_progress() -> dict:
         if current and current.get("status") in {"queued", "running"}:
             return _with_progress_url(current)
 
-    for progress in storage.list_evaluation_progresses(limit=10):
-        if progress.get("status") in {"queued", "running"}:
-            return _with_progress_url(progress)
     return {"status": "idle"}
 
 
@@ -77,7 +73,16 @@ def _run_background(run_id: str, question_set: dict | None = None) -> None:
         storage.save_evaluation_progress(payload)
 
     try:
-        record({"status": "running", "message": "评测任务开始执行"})
+        record({"status": "running", "message": "正在生成动态评测题集"})
+        if question_set is None:
+            question_set = generate_evaluation_question_set()
+        record(
+            {
+                "status": "running",
+                "total_units": get_evaluation_total_units(question_set),
+                "message": "动态题集已生成，开始执行评测",
+            }
+        )
         run_evaluation(run_id=run_id, progress_callback=record, question_set=question_set)
     except Exception as exc:  # noqa: BLE001
         record(

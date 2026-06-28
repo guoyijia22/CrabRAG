@@ -24,6 +24,19 @@ def read_ingest_progress(run_id: str) -> dict | None:
         return None
 
 
+def list_ingest_progresses(limit: int = 20) -> list[dict]:
+    if not INGEST_DIR.exists():
+        return []
+    paths = sorted(INGEST_DIR.glob("*.progress.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+    progresses: list[dict] = []
+    for path in paths[:limit]:
+        run_id = path.name.removesuffix(".progress.json")
+        payload = read_ingest_progress(run_id)
+        if payload:
+            progresses.append(payload)
+    return progresses
+
+
 def save_ingest_result(payload: dict) -> dict:
     INGEST_DIR.mkdir(parents=True, exist_ok=True)
     path = INGEST_DIR / f"{payload['run_id']}.json"

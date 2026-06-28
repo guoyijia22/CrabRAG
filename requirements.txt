@@ -13,4 +13,8 @@ pydantic
 pydantic-settings
 requests
 numpy
+onnxruntime
+tokenizers
+openpyxl
+python-pptx
 pytest

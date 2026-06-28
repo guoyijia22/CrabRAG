@@ -1551,18 +1551,21 @@ import { join as join2 } from "path";
 // server/bun_api/config.ts
 import { join, resolve } from "path";
 var RAG_BASE_URL = process.env.RAG_BASE_URL ?? "http://127.0.0.1:8001";
-var PROJECT_ROOT = resolve(process.env.ELCQA_ROOT ?? process.cwd());
-var DEFAULT_SYSTEM_NAME = "QueryBaseLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2";
+var PROJECT_ROOT = resolve(process.env.CRABRAG_ROOT ?? process.env.ELCQA_ROOT ?? process.cwd());
+var DEFAULT_SYSTEM_NAME = "CrabRAG \u901A\u7528\u57FA\u7840\u67E5\u8BE2";
+var LEGACY_DEFAULT_SYSTEM_NAMES = /* @__PURE__ */ new Set(["QueryBaseLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2", "QueryBasePortableLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2"]);
 var DEFAULT_KNOWLEDGE_BASE_NAME = "\u901A\u7528\u57FA\u7840\u67E5\u8BE2\u77E5\u8BC6\u5E93";
 var DEFAULT_UI_THEME = "red_white";
+var DEFAULT_UI_LANGUAGE = "en";
 async function readAppConfig() {
   const settingsPath = join(PROJECT_ROOT, "data", "app_settings.json");
   try {
     const payload = JSON.parse(await Bun.file(settingsPath).text());
     return {
-      system_name: payload.system_name || DEFAULT_SYSTEM_NAME,
+      system_name: normalizeSystemName(payload.system_name || DEFAULT_SYSTEM_NAME),
       knowledge_base_name: payload.knowledge_base_name || DEFAULT_KNOWLEDGE_BASE_NAME,
       ui_theme: normalizeTheme(payload.ui_theme),
+      ui_language: normalizeLanguage(payload.ui_language),
       common_questions: Array.isArray(payload.common_questions) ? payload.common_questions.slice(0, 10) : []
     };
   } catch {
@@ -1576,9 +1579,10 @@ async function readLegacyConfig() {
     const systemName = parseSystemName(text);
     const knowledgeBaseName = parseKnowledgeBaseName(text);
     return {
-      system_name: systemName || DEFAULT_SYSTEM_NAME,
+    system_name: normalizeSystemName(systemName || DEFAULT_SYSTEM_NAME),
       knowledge_base_name: knowledgeBaseName || DEFAULT_KNOWLEDGE_BASE_NAME,
       ui_theme: DEFAULT_UI_THEME,
+      ui_language: DEFAULT_UI_LANGUAGE,
       common_questions: parseCommonQuestions(text)
     };
   } catch {
@@ -1586,6 +1590,7 @@ async function readLegacyConfig() {
       system_name: DEFAULT_SYSTEM_NAME,
       knowledge_base_name: DEFAULT_KNOWLEDGE_BASE_NAME,
       ui_theme: DEFAULT_UI_THEME,
+      ui_language: DEFAULT_UI_LANGUAGE,
       common_questions: []
     };
   }
@@ -1596,8 +1601,14 @@ function parseSystemName(text) {
 function parseKnowledgeBaseName(text) {
   return parseScalar(text, "knowledge_base_name");
 }
+function normalizeSystemName(value) {
+  return LEGACY_DEFAULT_SYSTEM_NAMES.has(value) ? DEFAULT_SYSTEM_NAME : value;
+}
 function normalizeTheme(value) {
   return value === "blue_white" || value === "classic_green" || value === "red_white" ? value : DEFAULT_UI_THEME;
+}
+function normalizeLanguage(value) {
+  return value === "zh" || value === "en" ? value : DEFAULT_UI_LANGUAGE;
 }
 function parseScalar(text, key) {
   for (const line of text.split(/\r?\n/)) {
@@ -1743,6 +1754,10 @@ ingestRoute.post("/ingest/run", async (c) => {
   const res = await fetch(`${RAG_BASE_URL}/api/ingest/run`, { method: "POST" });
   return c.json(await res.json(), res.status);
 });
+ingestRoute.get("/ingest/active", async (c) => {
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest/active`);
+  return c.json(await res.json(), res.status);
+});
 ingestRoute.get("/ingest/:runId/progress", async (c) => {
   const runId = c.req.param("runId");
   const res = await fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}/progress`);
@@ -1791,6 +1806,22 @@ settingsRoute.put("/app-settings", async (c) => {
   });
   return c.json(await res.json(), res.status);
 });
+settingsRoute.put("/app-settings/sidebar-image", async (c) => {
+  const body = await c.req.json();
+  const res = await fetch(`${RAG_BASE_URL}/api/app-settings/sidebar-image`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  return c.json(await res.json(), res.status);
+});
+settingsRoute.get("/app-assets/sidebar-image", async () => {
+  const res = await fetch(`${RAG_BASE_URL}/api/app-assets/sidebar-image`);
+  return new Response(res.body, {
+    status: res.status,
+    headers: { "content-type": res.headers.get("content-type") ?? "application/octet-stream" }
+  });
+});
 settingsRoute.get("/model-settings", async (c) => {
   const res = await fetch(`${RAG_BASE_URL}/api/model-settings`);
   return c.json(await res.json(), res.status);
@@ -1807,7 +1838,7 @@ settingsRoute.put("/model-settings", async (c) => {
 
 // server/bun_api/index.ts
 var app = new Hono2;
-var port = Number(process.env.PORT ?? 3000);
+var port = Number(process.env.PORT ?? 3003);
 var webDistRelativePath = "apps/web/dist";
 var webDistDir = join2(PROJECT_ROOT, ...webDistRelativePath.split("/"));
 app.route("/api", chatRoute);
@@ -1849,8 +1880,10 @@ async function serveReactDist(pathname) {
   if (await Bun.file(join2(webDistDir, "index.html")).exists()) {
     return new Response("Not found", { status: 404 });
   }
-  const { system_name } = await readAppConfig();
-  return new Response(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(system_name)}</title></head><body><h1>${escapeHtml(system_name)}</h1><p>\u672A\u627E\u5230\u524D\u7AEF\u6784\u5EFA\u4EA7\u7269\uFF0C\u8BF7\u5148\u8FD0\u884C bun run build\uFF0C\u7136\u540E\u5237\u65B0\u672C\u9875\u3002</p></body></html>`, { status: 503, headers: { "content-type": "text/html; charset=utf-8" } });
+  const { system_name, ui_language } = await readAppConfig();
+  const langAttr = ui_language === "zh" ? "zh-CN" : "en";
+  const missingBuildMessage = ui_language === "zh" ? "\u672A\u627E\u5230\u524D\u7AEF\u6784\u5EFA\u4EA7\u7269\uFF0C\u8BF7\u5148\u8FD0\u884C bun run build\uFF0C\u7136\u540E\u5237\u65B0\u672C\u9875\u3002" : "Frontend build output was not found. Run bun run build, then refresh this page.";
+  return new Response(`<!doctype html><html lang="${langAttr}"><head><meta charset="utf-8"><title>${escapeHtml(system_name)}</title></head><body><h1>${escapeHtml(system_name)}</h1><p>${escapeHtml(missingBuildMessage)}</p></body></html>`, { status: 503, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 function hasFileExtension(value) {
   return /\.[a-z0-9]+$/i.test(value);

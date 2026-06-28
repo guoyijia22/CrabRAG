@@ -5,7 +5,7 @@ from services.rag_api.app_settings import load_app_settings
 
 def build_classify_prompt(categories: list[str]) -> str:
     category_text = "、".join(categories)
-    return f"""你是 QueryBaseLab 通用基础查询系统的意图分类器。
+    return f"""你是 CrabRAG 通用基础查询系统的意图分类器。
 
 请根据用户问题，从以下知识库类别中选择一个：
 {category_text}。
@@ -38,7 +38,7 @@ JSON 格式：
 CLASSIFY_PROMPT = build_classify_prompt(["客户准入", "办理流程", "资费咨询", "合规审核", "业务变更", "故障报修", "退订销户"])
 
 
-TOOL_CHOICE_PROMPT = """你是 QueryBaseLab 的 Agentic RAG 检索工具选择智能体。
+TOOL_CHOICE_PROMPT = """你是 CrabRAG 的 Agentic RAG 检索工具选择智能体。
 你必须根据用户问题、知识库类别、实体和工具说明，自主选择一个检索工具。
 
 可用工具：
@@ -62,10 +62,10 @@ JSON 格式：
 
 def build_answer_prompt() -> str:
     no_match_response = load_app_settings().no_match_response
-    return f"""你是 QueryBaseLab 通用基础查询助手。
+    return f"""你是 CrabRAG 通用基础查询助手。
 
 你只能依据下方【检索到的原文片段】回答。
-不得编造条款、不得新增规则、不得依据常识扩展政策。
+不得编造事实、规则、结论或来源，不得依据常识扩展知识库未提供的信息。
 如果原文片段不足以回答，必须输出统一兜底话术。
 
 统一兜底话术：
@@ -80,10 +80,7 @@ def build_answer_prompt() -> str:
 1. ……
 2. ……
 
-【合规提示】
-……
-
-【参考规范原文片段】
+【参考知识库原文片段】
 1. 来源：《文件名》
 原文片段：……
 

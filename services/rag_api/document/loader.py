@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+import io
 from pathlib import Path
+from collections.abc import Iterable
 
 from charset_normalizer import from_bytes
 from docx import Document
@@ -9,7 +12,7 @@ from services.rag_api.document.cleaner import clean_text
 from services.rag_api.exceptions import DOC_LOAD_ERROR_MESSAGE, DocumentLoadError
 
 
-SUPPORTED_SUFFIXES = {".docx", ".txt", ".pdf"}
+SUPPORTED_SUFFIXES = {".docx", ".txt", ".pdf", ".xlsx", ".xlsm", ".csv", ".pptx"}
 
 
 def read_txt_file(path: Path) -> str:
@@ -51,6 +54,71 @@ def read_pdf_file(path: Path) -> str:
     return text
 
 
+def read_csv_file(path: Path) -> str:
+    text = read_txt_file(path)
+    rows: list[str] = []
+    for row in csv.reader(io.StringIO(text)):
+        values = [cell.strip() for cell in row if cell and cell.strip()]
+        if values:
+            rows.append(" | ".join(values))
+    return "\n".join(rows)
+
+
+def read_excel_file(path: Path) -> str:
+    try:
+        from openpyxl import load_workbook
+    except Exception as exc:  # noqa: BLE001
+        raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE) from exc
+
+    workbook = None
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        rows: list[str] = []
+        for sheet in workbook.worksheets:
+            sheet_rows: list[str] = []
+            for row in sheet.iter_rows(values_only=True):
+                values = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+                if values:
+                    sheet_rows.append(" | ".join(values))
+            if sheet_rows:
+                rows.append(f"工作表：{sheet.title}")
+                rows.extend(sheet_rows)
+        return "\n".join(rows)
+    except Exception as exc:  # noqa: BLE001
+        raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE) from exc
+    finally:
+        if workbook is not None:
+            workbook.close()
+
+
+def read_pptx_file(path: Path) -> str:
+    try:
+        from pptx import Presentation
+    except Exception as exc:  # noqa: BLE001
+        raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE) from exc
+
+    try:
+        presentation = Presentation(str(path))
+        parts: list[str] = []
+        for slide_index, slide in enumerate(presentation.slides, start=1):
+            slide_parts: list[str] = []
+            for shape in slide.shapes:
+                text = getattr(shape, "text", "")
+                if text and text.strip():
+                    slide_parts.append(text.strip())
+                if getattr(shape, "has_table", False):
+                    for row in shape.table.rows:
+                        values = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                        if values:
+                            slide_parts.append(" | ".join(values))
+            if slide_parts:
+                parts.append(f"幻灯片 {slide_index}")
+                parts.extend(slide_parts)
+        return "\n".join(parts)
+    except Exception as exc:  # noqa: BLE001
+        raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE) from exc
+
+
 def _load_pymupdf():
     try:
         import pymupdf  # type: ignore
@@ -68,19 +136,25 @@ def _load_pymupdf():
         raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE) from exc
 
 
-def load_documents(kb_dir: Path) -> list[dict]:
-    if not kb_dir.exists() or not kb_dir.is_dir():
-        raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE)
-    files = sorted(path for path in kb_dir.iterdir() if path.suffix.lower() in SUPPORTED_SUFFIXES)
+def load_documents(kb_dir: Path | str | Iterable[Path | str]) -> list[dict]:
+    dirs = _normalize_dirs(kb_dir)
+    files = _scan_supported_files(dirs)
     if not files:
         raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE)
     documents: list[dict] = []
     for path in files:
         try:
-            if path.suffix.lower() == ".docx":
+            suffix = path.suffix.lower()
+            if suffix == ".docx":
                 raw = read_docx_file(path)
-            elif path.suffix.lower() == ".pdf":
+            elif suffix == ".pdf":
                 raw = read_pdf_file(path)
+            elif suffix in {".xlsx", ".xlsm"}:
+                raw = read_excel_file(path)
+            elif suffix == ".csv":
+                raw = read_csv_file(path)
+            elif suffix == ".pptx":
+                raw = read_pptx_file(path)
             else:
                 raw = read_txt_file(path)
             content = clean_text(raw)
@@ -91,3 +165,29 @@ def load_documents(kb_dir: Path) -> list[dict]:
     if not documents:
         raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE)
     return documents
+
+
+def has_supported_documents(kb_dir: Path | str | Iterable[Path | str]) -> bool:
+    return bool(_scan_supported_files(_normalize_dirs(kb_dir)))
+
+
+def _normalize_dirs(kb_dir: Path | str | Iterable[Path | str]) -> list[Path]:
+    if isinstance(kb_dir, (str, Path)):
+        raw_dirs = [kb_dir]
+    else:
+        raw_dirs = list(kb_dir)
+    result: list[Path] = []
+    for item in raw_dirs:
+        path = Path(item).expanduser().resolve()
+        if path not in result:
+            result.append(path)
+    return result
+
+
+def _scan_supported_files(dirs: list[Path]) -> list[Path]:
+    files: list[Path] = []
+    for directory in dirs:
+        if not directory.exists() or not directory.is_dir():
+            continue
+        files.extend(path for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES)
+    return sorted(files, key=lambda path: str(path).lower())

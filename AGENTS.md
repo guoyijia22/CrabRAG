@@ -2,12 +2,14 @@
 
 ## Project Structure & Module Organization
 
-This repository is a portable enterprise-line compliance RAG package. Python API code lives in `services/rag_api/`, organized by concern: `agent/` for LangGraph QA flow, `document/` for ingestion and parsing, `vector/` for Chroma integration, `graph/` for relationship search, `evaluation/` for evaluation runs, and `logging_utils/` for QA logs. `server/gateway.js` is the bundled Bun gateway that serves the web system and proxies API calls. `apps/web/dist/` contains the built frontend assets; frontend source is not included in this package. Knowledge-base files are stored in `docs/`, runtime state and Chroma data in `data/`, configuration in `config/.env`, and bundled executables/dependencies in `runtime/`.
+This repository is CrabRAG, a portable local RAG package. Python API code lives in `services/rag_api/`, organized by concern: `agent/` for LangGraph QA flow, `document/` for ingestion and parsing, `vector/` for Chroma integration, `graph/` for relationship search, `evaluation/` for evaluation runs, and `logging_utils/` for QA logs. `server/gateway.js` is the bundled Bun gateway that serves the web system and proxies API calls. `apps/web/dist/` contains the built frontend assets; frontend source is not included in this package. Knowledge-base files are stored in `docs/`, runtime state and Chroma data in `data/`, configuration in `config/.env`, and bundled executables/dependencies in `runtime/`.
 
 ## Build, Test, and Development Commands
 
-- `start.bat`: starts the bundled Python FastAPI service on `127.0.0.1:8001` and the Bun gateway on `127.0.0.1:3000`.
+- `start.bat`: starts the bundled Python FastAPI service on `127.0.0.1:8001` and the Bun gateway on `127.0.0.1:3003`.
 - `stop.bat`: stops the portable package processes recorded under `data/run/`.
+- `crab-rag.bat --question "..." --top-k 6 --pretty`: runs the CrabRAG evidence-only CLI for Uniclaw/OpenClaw or other local callers.
+- `crabrag.skill`: UniClaw single-file Skill that instructs UniClaw to call `crab-rag.bat` and answer from returned evidence only.
 - `runtime\python\python.exe -m uvicorn services.rag_api.main:app --host 127.0.0.1 --port 8001`: runs only the API for backend debugging.
 - `runtime\python\python.exe -m pytest`: runs Python tests when test files are added.
 

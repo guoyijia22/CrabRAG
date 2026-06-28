@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
-from services.rag_api.config import PROJECT_DIR
 from services.rag_api.document.categories import load_kb_categories
-from services.rag_api.graph.entities import ENTITIES
-from services.rag_api.graph.relations import RELATIONS
+from services.rag_api.graph.graph_store import KB_GRAPH_PATH, load_raw_graph
 from services.rag_api.graph.schema_config import load_graph_schema
-
-KB_GRAPH_PATH = PROJECT_DIR / "data" / "kb_graph.json"
 
 
 def build_graph_payload() -> dict[str, Any]:
     schema = load_graph_schema()
-    raw_nodes, raw_edges, graph_source = _load_raw_graph()
+    raw_nodes, raw_edges, graph_source = load_raw_graph(KB_GRAPH_PATH)
     nodes = [_node_payload(node, schema) for node in raw_nodes]
     edges = [_edge_payload(edge, schema) for edge in raw_edges]
     graph_source_files = _graph_source_files(nodes, edges)
@@ -80,103 +74,6 @@ def build_subgraph_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "graph_source_label": _graph_source_label("subgraph"),
         },
     }
-
-
-def _load_raw_graph() -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    if KB_GRAPH_PATH.exists():
-        try:
-            data = json.loads(KB_GRAPH_PATH.read_text(encoding="utf-8"))
-            nodes = _normalize_dynamic_nodes(data)
-            edges = _normalize_dynamic_edges(data)
-            if nodes or edges:
-                return nodes, edges, "dynamic_graph"
-        except (OSError, json.JSONDecodeError):
-            pass
-    return _static_nodes(), _static_edges(), "static_graph"
-
-
-def _static_nodes() -> list[dict[str, Any]]:
-    return [
-        {
-            "id": entity,
-            "label": entity,
-            "type": detail.get("type", ""),
-            "category": "",
-            "source_files": [],
-            "evidence_count": 0,
-        }
-        for entity, detail in ENTITIES.items()
-    ]
-
-
-def _static_edges() -> list[dict[str, Any]]:
-    return [
-        {
-            "source": rel.get("from", ""),
-            "target": rel.get("to", ""),
-            "label": rel.get("relation", ""),
-            "relation": rel.get("relation", ""),
-            "description": rel.get("description", ""),
-            "evidence": "",
-            "source_file": "",
-            "graph_source": "static_graph",
-            "confidence": 1.0,
-        }
-        for rel in RELATIONS
-    ]
-
-
-def _normalize_dynamic_nodes(data: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_nodes = data.get("nodes", [])
-    result: list[dict[str, Any]] = []
-    if isinstance(raw_nodes, list):
-        for item in raw_nodes:
-            if not isinstance(item, dict):
-                continue
-            node_id = str(item.get("id") or item.get("label") or item.get("name") or "").strip()
-            if not node_id:
-                continue
-            result.append(
-                {
-                    "id": node_id,
-                    "label": str(item.get("label") or node_id),
-                    "type": item.get("type", ""),
-                    "category": item.get("category", ""),
-                    "source_files": item.get("source_files", []),
-                    "evidence_count": item.get("evidence_count", 0),
-                    **{key: value for key, value in item.items() if key not in {"id", "label"}},
-                }
-            )
-    return result
-
-
-def _normalize_dynamic_edges(data: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_edges = data.get("edges") or data.get("relationships") or []
-    result: list[dict[str, Any]] = []
-    if isinstance(raw_edges, list):
-        for item in raw_edges:
-            if not isinstance(item, dict):
-                continue
-            source = str(item.get("source") or item.get("from") or "").strip()
-            target = str(item.get("target") or item.get("to") or "").strip()
-            if not source or not target:
-                continue
-            label = str(item.get("label") or item.get("relation") or item.get("type") or "")
-            result.append(
-                {
-                    "source": source,
-                    "target": target,
-                    "label": label,
-                    "relation": label,
-                    "description": item.get("description", ""),
-                    "evidence": item.get("evidence", ""),
-                    "source_file": item.get("source_file", ""),
-                    "graph_source": item.get("graph_source", "dynamic_graph"),
-                    "confidence": item.get("confidence", 0.8),
-                    **{key: value for key, value in item.items() if key not in {"source", "from", "target", "to", "label", "relation", "type"}},
-                }
-            )
-    return result
 
 
 def _node_payload(raw: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:

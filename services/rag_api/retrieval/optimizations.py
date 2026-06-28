@@ -6,6 +6,7 @@ from typing import Any
 import requests
 
 from services.rag_api.config import get_settings
+from services.rag_api.llm import local_onnx_rerank
 from services.rag_api.llm.siliconflow_client import chat_completion
 from services.rag_api.rag_settings import RagSettings
 
@@ -64,31 +65,15 @@ def keyword_search_candidates(query: str, chunks: list[dict], settings: RagSetti
     return candidates[:limit]
 
 
-def rrf_merge(vector_results: list[dict], keyword_results: list[dict], settings: RagSettings, top_k: int) -> list[dict]:
-    if not settings.hybrid_bm25_enabled:
-        return vector_results[:top_k]
-    scores: dict[str, float] = {}
-    payloads: dict[str, dict] = {}
-    k = 60
-    for weight, results in [(settings.vector_weight, vector_results), (settings.bm25_weight, keyword_results)]:
-        for rank, item in enumerate(results, start=1):
-            key = _chunk_key(item)
-            scores[key] = scores.get(key, 0.0) + weight / (k + rank)
-            payloads.setdefault(key, item)
-    merged = []
-    for key, score in scores.items():
-        merged.append({**payloads[key], "score": round(score, 6)})
-    merged.sort(key=lambda item: item["score"], reverse=True)
-    return merged[:top_k]
-
-
 def apply_rerank(query: str, chunks: list[dict], settings: RagSettings, top_k: int) -> tuple[list[dict], dict[str, Any]]:
-    trace = {"enabled": settings.rerank_enabled, "fallback": False, "candidate_count": len(chunks)}
+    trace = {"enabled": settings.rerank_enabled, "provider": settings.rerank_provider, "fallback": False, "candidate_count": len(chunks)}
     if not settings.rerank_enabled or not chunks:
         return chunks[:top_k], trace
+    if settings.rerank_provider == "local_onnx":
+        return _apply_local_rerank(query, chunks, top_k, trace)
     app_settings = get_settings()
-    url = f"{app_settings.embedding_base_url.rstrip('/')}/rerank"
-    headers = {"Authorization": f"Bearer {app_settings.embedding_api_key or 'local'}", "Content-Type": "application/json"}
+    url = f"{app_settings.rerank_base_url.rstrip('/')}/rerank"
+    headers = {"Authorization": f"Bearer {app_settings.rerank_api_key or 'local'}", "Content-Type": "application/json"}
     payload = {
         "model": settings.rerank_model,
         "query": query,
@@ -113,14 +98,37 @@ def apply_rerank(query: str, chunks: list[dict], settings: RagSettings, top_k: i
     return chunks[:top_k], trace
 
 
+def _apply_local_rerank(query: str, chunks: list[dict], top_k: int, trace: dict[str, Any]) -> tuple[list[dict], dict[str, Any]]:
+    app_settings = get_settings()
+    documents = [chunk.get("content", "") for chunk in chunks]
+    try:
+        results = local_onnx_rerank.rerank_documents_local(
+            query,
+            documents,
+            app_settings.local_rerank_model_dir,
+            min(top_k, len(chunks)),
+            app_settings.rerank_onnx_model_file,
+        )
+        reranked: list[dict] = []
+        for result in results:
+            index = int(result.get("index", 0))
+            score = result.get("relevance_score")
+            if 0 <= index < len(chunks):
+                reranked.append({**chunks[index], "score": score if score is not None else chunks[index].get("score", 0), "rerank_score": score})
+        if reranked:
+            reranked = reranked[:top_k]
+            trace["returned_count"] = len(reranked)
+            return reranked, trace
+    except Exception as exc:  # noqa: BLE001
+        trace["fallback"] = True
+        trace["error"] = str(exc)
+    return chunks[:top_k], trace
+
+
 def _tokenize(query: str) -> list[str]:
     terms = re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9]+", query)
     extra = [term for term in ["欠费", "地址迁移", "带宽变更", "一票否决", "中断", "报修", "销户", "资费", "材料", "审核"] if term in query]
     return _dedupe(terms + extra)
-
-
-def _chunk_key(item: dict) -> str:
-    return f"{item.get('source_file')}::{item.get('content', '')[:100]}"
 
 
 def _dedupe(items: list[str]) -> list[str]:

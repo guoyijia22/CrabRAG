@@ -1,12 +1,25 @@
 # Local secrets
+.env
+.env.*
+!.env.example
+!config/.env.example
 config/.env
 
 # Runtime state and generated data
 data/
 logs/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Knowledge-base content
+docs/*
+!docs/.gitkeep
 
 # Bundled portable runtimes
 runtime/
+node_modules/
 
 # Python caches and test output
 __pycache__/

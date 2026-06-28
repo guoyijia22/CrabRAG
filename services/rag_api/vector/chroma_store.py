@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from collections.abc import Callable
+from math import ceil
 from typing import Any
 
 import chromadb
+from chromadb.utils.batch_utils import create_batches
 
 from services.rag_api.config import get_settings
 from services.rag_api.document.categories import source_files_for_category
@@ -13,19 +16,16 @@ from services.rag_api.rag_settings import load_rag_settings
 
 EMBEDDING_BATCH_SIZE = 64
 _COLLECTION_OVERRIDE: ContextVar[str | None] = ContextVar("collection_name_override", default=None)
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 def get_collection():
-    settings = get_settings()
-    settings.chroma_dir.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(settings.chroma_dir))
+    client = _get_chroma_client()
     return client.get_or_create_collection(name=_collection_name(), metadata={"hnsw:space": "cosine"})
 
 
 def reset_collection():
-    settings = get_settings()
-    settings.chroma_dir.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(settings.chroma_dir))
+    client = _get_chroma_client()
     try:
         client.delete_collection(_collection_name())
     except Exception:
@@ -33,26 +33,61 @@ def reset_collection():
     return client.get_or_create_collection(name=_collection_name(), metadata={"hnsw:space": "cosine"})
 
 
-def add_chunks(chunks: list[dict]) -> int:
+def add_chunks(chunks: list[dict], progress_callback: ProgressCallback | None = None) -> int:
     if not chunks:
         return 0
     documents = [chunk["content"] for chunk in chunks]
-    embeddings = _embed_in_batches(documents)
+    embeddings = _embed_in_batches(documents, progress_callback=progress_callback)
+    ids = [chunk["id"] for chunk in chunks]
+    metadatas = [chunk["metadata"] for chunk in chunks]
+    client = _get_chroma_client()
     collection = reset_collection()
-    collection.add(
-        ids=[chunk["id"] for chunk in chunks],
-        documents=documents,
+    for batch_ids, batch_embeddings, batch_metadatas, batch_documents in create_batches(
+        client,
+        ids=ids,
         embeddings=embeddings,
-        metadatas=[chunk["metadata"] for chunk in chunks],
-    )
+        metadatas=metadatas,
+        documents=documents,
+    ):
+        collection.add(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
     return len(chunks)
 
 
-def _embed_in_batches(documents: list[str]) -> list[list[float]]:
+def _get_chroma_client():
+    settings = get_settings()
+    settings.chroma_dir.mkdir(parents=True, exist_ok=True)
+    return chromadb.PersistentClient(path=str(settings.chroma_dir))
+
+
+def embedding_batch_count(document_count: int) -> int:
+    if document_count <= 0:
+        return 0
+    return ceil(document_count / EMBEDDING_BATCH_SIZE)
+
+
+def _embed_in_batches(documents: list[str], progress_callback: ProgressCallback | None = None) -> list[list[float]]:
     embeddings: list[list[float]] = []
+    total = len(documents)
+    total_batches = embedding_batch_count(total)
+    provider = get_settings().embedding_provider
+    step = "本地向量化" if provider == "local_onnx" else "向量化"
     for start in range(0, len(documents), EMBEDDING_BATCH_SIZE):
         batch = documents[start : start + EMBEDDING_BATCH_SIZE]
         embeddings.extend(embed_texts(batch))
+        if progress_callback:
+            current_batch = start // EMBEDDING_BATCH_SIZE + 1
+            processed = min(start + len(batch), total)
+            label = "本地向量化中" if provider == "local_onnx" else "向量化中"
+            progress_callback(
+                {
+                    "current_step": step,
+                    "message": f"{label}：第 {current_batch} / {total_batches} 批，已处理 {processed} / {total} 个片段",
+                    "detail_current": current_batch,
+                    "detail_total": total_batches,
+                    "detail_processed": processed,
+                    "detail_size": total,
+                }
+            )
     return embeddings
 
 
@@ -76,12 +111,8 @@ def _collection_name() -> str:
 
 def search_chunks(query: str, intent: str, entities: list[str] | None = None, top_k: int = 2, min_score: float | None = None, candidate_k: int | None = None) -> list[dict]:
     rag_settings = load_rag_settings()
-    if rag_settings.rag_param_tuning_enabled:
-        min_score = rag_settings.min_score if min_score is None else min_score
-        candidate_k = max(rag_settings.vector_candidate_k, top_k * 4) if candidate_k is None else candidate_k
-    else:
-        min_score = 0.35 if min_score is None else min_score
-        candidate_k = max(top_k * 4, 6) if candidate_k is None else candidate_k
+    min_score = rag_settings.min_score if min_score is None else min_score
+    candidate_k = max(rag_settings.vector_candidate_k, top_k * 4) if candidate_k is None else candidate_k
     entities = entities or []
     collection = get_collection()
     if collection.count() == 0:

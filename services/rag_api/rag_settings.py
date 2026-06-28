@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
-import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
-PROJECT_ROOT = Path(os.getenv("ELCQA_ROOT") or Path(__file__).resolve().parents[2]).resolve()
+from services.rag_api.paths import resolve_project_root
+
+PROJECT_ROOT = resolve_project_root(Path(__file__).resolve().parents[2])
 SETTINGS_PATH = PROJECT_ROOT / "data" / "rag_settings.json"
 _SETTINGS_OVERRIDE: ContextVar["RagSettings | None"] = ContextVar("rag_settings_override", default=None)
+RerankProvider = Literal["api", "local_onnx"]
 
 
 class RagSettings(BaseModel):
@@ -25,8 +28,10 @@ class RagSettings(BaseModel):
     top_k: int = Field(default=2, ge=1, le=10)
     min_score: float = Field(default=0.35, ge=0.0, le=1.0)
     vector_candidate_k: int = Field(default=8, ge=2, le=50)
+    max_context_tokens: int = Field(default=6000, ge=100, le=50000)
     bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     vector_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    rerank_provider: RerankProvider = "api"
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
 
 

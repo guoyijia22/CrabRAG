@@ -5,8 +5,13 @@ import uuid
 from datetime import datetime
 from typing import Callable
 
+from services.rag_api.agent.business_scope import check_business_scope
 from services.rag_api.agent.graph import run_qa
+from services.rag_api.agent.heuristics import heuristic_classify, heuristic_tool_choice
+from services.rag_api.agent.tools import dispatch_retrieval
+from services.rag_api.config import get_settings
 from services.rag_api.document.ingest import ingest_knowledge_base
+from services.rag_api.document.categories import get_category_names
 from services.rag_api.evaluation.profiles import build_evaluation_profiles, evaluation_collection_names, serialize_profile
 from services.rag_api.evaluation.questions import generate_evaluation_question_set
 from services.rag_api.evaluation.scoring import attach_baseline_deltas, build_overall_summary, score_case, score_profile
@@ -128,7 +133,10 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
     started = time.perf_counter()
     try:
         with override_rag_settings(profile["settings"]), override_collection_name(profile.get("collection_name")):
-            result = run_qa(state)
+            if get_settings().use_local_models:
+                result = _run_local_retrieval_case(state, profile)
+            else:
+                result = run_qa(state)
         error = result.get("error")
     except Exception as exc:  # noqa: BLE001
         result = {"answer": "", "references": [], "trace": [], "relation_paths": [], "error": str(exc)}
@@ -161,3 +169,76 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
     }
     case["metrics"] = score_case(case)
     return case
+
+
+def _run_local_retrieval_case(state: dict, profile: dict) -> dict:
+    question = state["question"]
+    history = state.get("history", [])
+    categories = get_category_names()
+    effective_question = question
+    trace = state.get("trace", []) + [
+        {"node": "evaluation_mode", "output": {"use_local_models": True, "llm_answer_generation": False}},
+    ]
+    scope = check_business_scope(effective_question, categories)
+    trace.append({"node": "business_scope_check", "output": scope})
+    if not scope.get("in_scope", True):
+        return {
+            **state,
+            "answer": "",
+            "intent": "业务外",
+            "retrieval_mode": "none",
+            "references": [],
+            "relation_paths": [],
+            "trace": trace,
+            "error": None,
+        }
+
+    parsed = heuristic_classify(effective_question, history, categories)
+    tool_state = {**state, **parsed, "effective_question": effective_question}
+    selected_tool, reason = heuristic_tool_choice(tool_state)
+    retrieval = dispatch_retrieval(
+        effective_question,
+        parsed["intent"],
+        parsed.get("entities", []),
+        selected_tool,
+        allow_query_expansion=False,
+        allow_rerank=bool(getattr(profile["settings"], "rerank_enabled", False)),
+    )
+    top_k = get_retrieval_top_k(profile["settings"])
+    references = retrieval.get("chunks", [])[:top_k]
+    trace.extend(retrieval.get("trace", []))
+    trace.append(
+        {
+            "node": "agent_tool_choice",
+            "output": {"selected_tool": selected_tool, "retrieval_mode": retrieval.get("mode", ""), "reason": reason},
+        }
+    )
+    trace.append(
+        {
+            "node": "retrieve",
+            "output": {"top_k": top_k, "mode": retrieval.get("mode", ""), "sources": [chunk.get("source_file", "") for chunk in references]},
+        }
+    )
+    trace.append({"node": "generate_answer", "output": {"skipped": True, "reason": "local_evaluation_retrieval_only"}})
+    return {
+        **state,
+        **parsed,
+        "effective_question": effective_question,
+        "retrieval_mode": retrieval.get("mode", parsed.get("retrieval_mode", "")),
+        "references": references,
+        "retrieved_chunks": references,
+        "relation_paths": retrieval.get("relation_paths", [])[:top_k],
+        "answer": _format_retrieval_only_answer(parsed["intent"], references),
+        "trace": trace,
+        "error": retrieval.get("error"),
+    }
+
+
+def _format_retrieval_only_answer(intent: str, references: list[dict]) -> str:
+    if not references:
+        return ""
+    refs = "\n\n".join(
+        f"{index}. 来源：《{chunk.get('source_file', '')}》\n原文片段：{chunk.get('content', '')}"
+        for index, chunk in enumerate(references, start=1)
+    )
+    return f"【业务类别】\n{intent}\n\n【答复】\n评测模式仅汇总检索证据，不调用本地大模型生成最终答案。\n\n【参考知识库原文片段】\n{refs}"
