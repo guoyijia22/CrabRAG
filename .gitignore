@@ -8,6 +8,7 @@ config/.env
 # Runtime state and generated data
 data/
 logs/
+.venv/
 *.db
 *.sqlite
 *.sqlite3
