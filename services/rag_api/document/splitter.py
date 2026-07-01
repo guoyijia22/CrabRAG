@@ -32,6 +32,8 @@ def split_documents(documents: list[dict], chunk_size: int = 600, chunk_overlap:
     for doc_index, doc in enumerate(documents, start=1):
         source_file = doc["source_file"]
         source_path = doc["source_path"]
+        doc_id = doc.get("doc_id")
+        content_hash = doc.get("content_hash")
         category = infer_category(source_file, doc["content"])
         buffer = ""
         chunk_index = 0
@@ -41,33 +43,47 @@ def split_documents(documents: list[dict], chunk_size: int = 600, chunk_overlap:
                 continue
             if buffer:
                 chunk_index += 1
-                chunks.append(_make_chunk(doc_index, chunk_index, buffer, source_file, source_path, category))
+                chunks.append(_make_chunk(doc_index, chunk_index, buffer, source_file, source_path, category, doc_id, content_hash))
                 buffer = buffer[-chunk_overlap:] if chunk_overlap > 0 else ""
             if len(unit) > chunk_size:
                 start = 0
                 while start < len(unit):
                     piece = unit[start : start + chunk_size]
                     chunk_index += 1
-                    chunks.append(_make_chunk(doc_index, chunk_index, piece, source_file, source_path, category))
+                    chunks.append(_make_chunk(doc_index, chunk_index, piece, source_file, source_path, category, doc_id, content_hash))
                     start += max(1, chunk_size - chunk_overlap)
                 buffer = ""
             else:
                 buffer = f"{buffer}\n{unit}".strip()
         if buffer:
             chunk_index += 1
-            chunks.append(_make_chunk(doc_index, chunk_index, buffer, source_file, source_path, category))
+            chunks.append(_make_chunk(doc_index, chunk_index, buffer, source_file, source_path, category, doc_id, content_hash))
     return chunks
 
 
-def _make_chunk(doc_index: int, chunk_index: int, content: str, source_file: str, source_path: str, category: str) -> dict:
+def _make_chunk(
+    doc_index: int,
+    chunk_index: int,
+    content: str,
+    source_file: str,
+    source_path: str,
+    category: str,
+    doc_id: str | None = None,
+    content_hash: str | None = None,
+) -> dict:
+    metadata = {
+        "source_file": source_file,
+        "category": category,
+        "section_title": _section_title(content),
+        "chunk_index": chunk_index,
+        "source_path": source_path,
+    }
+    if doc_id:
+        metadata["doc_id"] = doc_id
+    if content_hash:
+        metadata["content_hash"] = content_hash
     return {
-        "id": f"doc_{doc_index:02d}_chunk_{chunk_index:04d}",
+        "id": f"{doc_id}::chunk::{chunk_index:04d}" if doc_id else f"doc_{doc_index:02d}_chunk_{chunk_index:04d}",
         "content": content.strip(),
-        "metadata": {
-            "source_file": source_file,
-            "category": category,
-            "section_title": _section_title(content),
-            "chunk_index": chunk_index,
-            "source_path": source_path,
-        },
+        "metadata": metadata,
     }

@@ -7,6 +7,8 @@ class FakeCollection:
     def __init__(self, name: str) -> None:
         self.name = name
         self.added: list[dict[str, Any]] = []
+        self.upserted: list[dict[str, Any]] = []
+        self.deleted: list[list[str]] = []
 
     def add(self, *, ids, documents, embeddings, metadatas) -> None:
         self.added.append(
@@ -18,8 +20,21 @@ class FakeCollection:
             }
         )
 
+    def upsert(self, *, ids, documents, embeddings, metadatas) -> None:
+        self.upserted.append(
+            {
+                "ids": list(ids),
+                "documents": list(documents),
+                "embeddings": list(embeddings),
+                "metadatas": list(metadatas),
+            }
+        )
+
+    def delete(self, *, ids) -> None:
+        self.deleted.append(list(ids))
+
     def count(self) -> int:
-        return sum(len(batch["ids"]) for batch in self.added)
+        return sum(len(batch["ids"]) for batch in self.added + self.upserted)
 
     def query(self, *, query_embeddings, n_results, include):
         documents = [document for batch in self.added for document in batch["documents"]]
@@ -121,3 +136,63 @@ def test_search_graph_vectors_returns_normalized_payloads(monkeypatch):
     assert results[0]["id"] == "一渠一表"
     assert results[0]["source_files"] == ["a.docx"]
     assert results[0]["score"] == 0.9
+
+
+def test_index_graph_vectors_incremental_upserts_only_changed_records(tmp_path, monkeypatch):
+    from services.rag_api.graph import graph_vector_store
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(graph_vector_store, "_get_chroma_client", lambda: fake_client)
+    monkeypatch.setattr(graph_vector_store, "embed_texts", lambda texts: [[float(index)] for index, _ in enumerate(texts)])
+    monkeypatch.setattr(graph_vector_store, "_base_collection_name", lambda: "crabrag_test")
+    monkeypatch.setattr(graph_vector_store, "GRAPH_VECTOR_MANIFEST_PATH", tmp_path / "graph_vector_manifest.json")
+
+    first = graph_vector_store.index_graph_vectors_incremental(
+        nodes=[
+            {"id": "一渠一表", "label": "一渠一表", "type": "主题实体", "source_files": ["a.docx"]},
+            {"id": "项目材料", "label": "项目材料", "type": "知识分类", "source_files": ["a.docx"]},
+        ],
+        edges=[
+            {
+                "source": "一渠一表",
+                "target": "项目材料",
+                "label": "关联分类",
+                "description": "一渠一表关联项目材料",
+                "source_file": "a.docx",
+            }
+        ],
+    )
+    second = graph_vector_store.index_graph_vectors_incremental(
+        nodes=[
+            {"id": "一渠一表", "label": "一渠一表", "type": "主题实体", "source_files": ["a.docx"]},
+            {"id": "项目材料", "label": "项目材料", "type": "知识分类", "source_files": ["a.docx"]},
+        ],
+        edges=[
+            {
+                "source": "一渠一表",
+                "target": "项目材料",
+                "label": "关联分类",
+                "description": "一渠一表关联项目材料",
+                "source_file": "a.docx",
+            }
+        ],
+    )
+    third = graph_vector_store.index_graph_vectors_incremental(
+        nodes=[
+            {"id": "一渠一表", "label": "一渠一表", "type": "主题实体", "source_files": ["a.docx", "b.docx"]},
+        ],
+        edges=[],
+    )
+
+    entity_collection = fake_client.collections["crabrag_test_graph_entities"]
+    relationship_collection = fake_client.collections["crabrag_test_graph_relationships"]
+    assert first == {"graph_entity_index_count": 2, "graph_relationship_index_count": 1}
+    assert second == {"graph_entity_index_count": 2, "graph_relationship_index_count": 1}
+    assert third == {"graph_entity_index_count": 1, "graph_relationship_index_count": 0}
+    assert [batch["ids"] for batch in entity_collection.upserted] == [
+        ["entity::一渠一表", "entity::项目材料"],
+        ["entity::一渠一表"],
+    ]
+    assert relationship_collection.upserted[0]["ids"] == ["relationship::一渠一表->关联分类->项目材料"]
+    assert entity_collection.deleted == [["entity::项目材料"]]
+    assert relationship_collection.deleted == [["relationship::一渠一表->关联分类->项目材料"]]

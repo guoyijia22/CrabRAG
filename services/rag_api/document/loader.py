@@ -141,34 +141,40 @@ def load_documents(kb_dir: Path | str | Iterable[Path | str]) -> list[dict]:
     files = _scan_supported_files(dirs)
     if not files:
         raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE)
-    documents: list[dict] = []
-    for path in files:
-        try:
-            suffix = path.suffix.lower()
-            if suffix == ".docx":
-                raw = read_docx_file(path)
-            elif suffix == ".pdf":
-                raw = read_pdf_file(path)
-            elif suffix in {".xlsx", ".xlsm"}:
-                raw = read_excel_file(path)
-            elif suffix == ".csv":
-                raw = read_csv_file(path)
-            elif suffix == ".pptx":
-                raw = read_pptx_file(path)
-            else:
-                raw = read_txt_file(path)
-            content = clean_text(raw)
-            if content:
-                documents.append({"source_file": path.name, "source_path": str(path), "content": content})
-        except Exception as exc:  # noqa: BLE001
-            raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE) from exc
+    documents = [doc for doc in (load_document(path) for path in files) if doc.get("content")]
     if not documents:
         raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE)
     return documents
 
 
+def load_document(path: Path | str) -> dict:
+    file_path = Path(path)
+    try:
+        suffix = file_path.suffix.lower()
+        if suffix == ".docx":
+            raw = read_docx_file(file_path)
+        elif suffix == ".pdf":
+            raw = read_pdf_file(file_path)
+        elif suffix in {".xlsx", ".xlsm"}:
+            raw = read_excel_file(file_path)
+        elif suffix == ".csv":
+            raw = read_csv_file(file_path)
+        elif suffix == ".pptx":
+            raw = read_pptx_file(file_path)
+        else:
+            raw = read_txt_file(file_path)
+        content = clean_text(raw)
+        return {"source_file": file_path.name, "source_path": str(file_path), "content": content}
+    except Exception as exc:  # noqa: BLE001
+        raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE) from exc
+
+
 def has_supported_documents(kb_dir: Path | str | Iterable[Path | str]) -> bool:
     return bool(_scan_supported_files(_normalize_dirs(kb_dir)))
+
+
+def scan_supported_files(kb_dir: Path | str | Iterable[Path | str]) -> list[Path]:
+    return _scan_supported_files(_normalize_dirs(kb_dir))
 
 
 def _normalize_dirs(kb_dir: Path | str | Iterable[Path | str]) -> list[Path]:

@@ -140,6 +140,23 @@ def test_health_reports_empty_docs_directory(tmp_path, monkeypatch):
     assert payload["docs_dir_has_files"] is True
 
 
+def test_graph_payload_returns_empty_graph_when_no_dynamic_graph_or_sources(tmp_path, monkeypatch):
+    from services.rag_api.graph import graph_api, graph_store
+
+    missing_graph = tmp_path / "missing-kb-graph.json"
+    monkeypatch.setattr(graph_api, "KB_GRAPH_PATH", missing_graph)
+    monkeypatch.setattr(graph_store, "KB_GRAPH_PATH", missing_graph)
+    monkeypatch.setattr(graph_api, "load_kb_categories", lambda: {"items": [], "categories": []})
+
+    payload = graph_api.build_graph_payload()
+
+    assert payload["nodes"] == []
+    assert payload["edges"] == []
+    assert payload["stats"]["graph_source"] == "empty_graph"
+    assert payload["stats"]["node_count"] == 0
+    assert payload["stats"]["edge_count"] == 0
+
+
 def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypatch):
     from services.rag_api.config import Settings
     from services.rag_api.document import ingest
@@ -149,19 +166,21 @@ def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypat
     second = tmp_path / "docs-b"
     first.mkdir()
     second.mkdir()
+    (first / "a.txt").write_text("客户准入材料", encoding="utf-8")
     captured = {}
 
-    def fake_load_documents(dirs):
+    def fake_scan_supported_files(dirs):
         captured["dirs"] = dirs
-        return [{"source_file": "a.txt", "source_path": str(first / "a.txt"), "content": "客户准入材料"}]
+        return [first / "a.txt"]
 
     monkeypatch.setattr(ingest, "get_settings", lambda: Settings(docs_dirs=[first, second], docs_dir=first))
     monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings())
-    monkeypatch.setattr(ingest, "load_documents", fake_load_documents)
+    monkeypatch.setattr(ingest, "scan_supported_files", fake_scan_supported_files)
+    monkeypatch.setattr(ingest, "load_document", lambda path: {"source_file": "a.txt", "source_path": str(path), "content": "客户准入材料"})
     monkeypatch.setattr(ingest, "split_documents", lambda documents, chunk_size, chunk_overlap: [{"id": "1", "content": "客户准入材料", "metadata": {"source_file": "a.txt", "category": "客户准入"}}])
     monkeypatch.setattr(ingest, "expand_multi_vector_chunks", lambda chunks, rag_settings: chunks)
     monkeypatch.setattr(ingest, "embedding_batch_count", lambda count: 1)
-    monkeypatch.setattr(ingest, "add_chunks", lambda chunks, progress_callback=None: len(chunks))
+    monkeypatch.setattr(ingest, "upsert_chunks_incremental", lambda chunks, delete_chunk_ids=None, progress_callback=None: len(chunks))
     monkeypatch.setattr(ingest, "save_kb_categories", lambda documents, chunks: {"items": [], "categories": []})
     monkeypatch.setattr(ingest, "read_app_config", lambda: (_ for _ in ()).throw(AssertionError("rebuild must not read common questions")), raising=False)
     monkeypatch.setattr(ingest, "generate_common_questions", lambda category_payload: (_ for _ in ()).throw(AssertionError("rebuild must not generate common questions")), raising=False)
@@ -171,7 +190,7 @@ def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypat
     monkeypatch.setattr(ingest, "build_and_save_kb_graph", lambda category_payload, documents, chunks: {"nodes": [{"id": "客户准入"}], "edges": [{"id": "edge-1"}]}, raising=False)
     monkeypatch.setattr(
         ingest,
-        "index_graph_vectors",
+        "index_graph_vectors_incremental",
         lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
     )
 
@@ -359,6 +378,7 @@ def test_frontend_english_language_covers_async_static_labels():
     assert "Scanning and reading knowledge-base directories" in bundle
     assert "Read $1 documents, preparing chunks" in bundle
     assert "Generated $1 base chunks" in bundle
+    assert "Processed $1 documents, skipped $2, removed $3, generated $4 base chunks" in bundle
     assert "$1 chunks pending indexing" in bundle
     assert "Wrote $1 Chroma vector chunks" in bundle
     assert "Generated $1 knowledge-base categories" in bundle

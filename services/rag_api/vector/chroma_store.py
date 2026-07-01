@@ -53,6 +53,32 @@ def add_chunks(chunks: list[dict], progress_callback: ProgressCallback | None = 
     return len(chunks)
 
 
+def upsert_chunks_incremental(
+    chunks: list[dict],
+    delete_chunk_ids: list[str] | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> int:
+    collection = get_collection()
+    if delete_chunk_ids:
+        collection.delete(ids=delete_chunk_ids)
+    if not chunks:
+        return 0
+    documents = [chunk["content"] for chunk in chunks]
+    embeddings = _embed_in_batches(documents, progress_callback=progress_callback)
+    ids = [chunk["id"] for chunk in chunks]
+    metadatas = [chunk["metadata"] for chunk in chunks]
+    client = _get_chroma_client()
+    for batch_ids, batch_embeddings, batch_metadatas, batch_documents in create_batches(
+        client,
+        ids=ids,
+        embeddings=embeddings,
+        metadatas=metadatas,
+        documents=documents,
+    ):
+        collection.upsert(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
+    return len(chunks)
+
+
 def _get_chroma_client():
     settings = get_settings()
     settings.chroma_dir.mkdir(parents=True, exist_ok=True)

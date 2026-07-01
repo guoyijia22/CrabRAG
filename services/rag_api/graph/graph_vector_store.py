@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
 from chromadb.utils.batch_utils import create_batches
 
-from services.rag_api.config import get_settings
+from services.rag_api.config import PROJECT_DIR, get_settings
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.vector.chroma_store import EMBEDDING_BATCH_SIZE
 from services.rag_api.vector.chroma_store import _get_chroma_client
 
 ENTITY_SUFFIX = "_graph_entities"
 RELATIONSHIP_SUFFIX = "_graph_relationships"
+GRAPH_VECTOR_MANIFEST_PATH = PROJECT_DIR / "data" / "ingest" / "graph_vector_manifest.json"
 
 
 def index_graph_vectors(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int]:
@@ -22,6 +24,23 @@ def index_graph_vectors(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
     return {
         "graph_entity_index_count": len(entity_chunks),
         "graph_relationship_index_count": len(relationship_chunks),
+    }
+
+
+def index_graph_vectors_incremental(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int]:
+    entity_records = [_entity_record(node) for node in nodes if _node_id(node)]
+    relationship_records = [_relationship_record(edge) for edge in edges if _edge_source(edge) and _edge_target(edge)]
+    manifest = _load_manifest()
+    manifest["entities"] = _sync_collection(entity_collection_name(), entity_records, manifest.get("entities", {}))
+    manifest["relationships"] = _sync_collection(
+        relationship_collection_name(),
+        relationship_records,
+        manifest.get("relationships", {}),
+    )
+    _save_manifest(manifest)
+    return {
+        "graph_entity_index_count": len(entity_records),
+        "graph_relationship_index_count": len(relationship_records),
     }
 
 
@@ -66,6 +85,35 @@ def _reset_and_add(collection_name: str, records: list[dict[str, Any]]) -> None:
         documents=documents,
     ):
         collection.add(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
+
+
+def _sync_collection(collection_name: str, records: list[dict[str, Any]], previous: dict[str, Any]) -> dict[str, str]:
+    previous_hashes = {str(key): str(value) for key, value in (previous or {}).items()}
+    current_hashes = {record["id"]: _record_hash(record) for record in records}
+    removed_ids = sorted(set(previous_hashes) - set(current_hashes))
+    changed_records = [record for record in records if previous_hashes.get(record["id"]) != current_hashes[record["id"]]]
+    client = _get_chroma_client()
+    collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+    if removed_ids:
+        collection.delete(ids=removed_ids)
+    if changed_records:
+        _upsert_records(client, collection, changed_records)
+    return current_hashes
+
+
+def _upsert_records(client, collection, records: list[dict[str, Any]]) -> None:
+    documents = [record["document"] for record in records]
+    embeddings = _embed_documents(documents)
+    ids = [record["id"] for record in records]
+    metadatas = [record["metadata"] for record in records]
+    for batch_ids, batch_embeddings, batch_metadatas, batch_documents in create_batches(
+        client,
+        ids=ids,
+        embeddings=embeddings,
+        metadatas=metadatas,
+        documents=documents,
+    ):
+        collection.upsert(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
 
 
 def _search_collection(collection_name: str, query: str, top_k: int) -> list[dict[str, Any]]:
@@ -176,6 +224,32 @@ def _normalize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         except json.JSONDecodeError:
             result["source_files"] = [source_files] if source_files else []
     return result
+
+
+def _load_manifest() -> dict[str, Any]:
+    if not GRAPH_VECTOR_MANIFEST_PATH.exists():
+        return {"entities": {}, "relationships": {}}
+    try:
+        payload = json.loads(GRAPH_VECTOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"entities": {}, "relationships": {}}
+    if not isinstance(payload, dict):
+        return {"entities": {}, "relationships": {}}
+    return {
+        "entities": payload.get("entities", {}) if isinstance(payload.get("entities"), dict) else {},
+        "relationships": payload.get("relationships", {}) if isinstance(payload.get("relationships"), dict) else {},
+    }
+
+
+def _save_manifest(manifest: dict[str, Any]) -> None:
+    GRAPH_VECTOR_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    GRAPH_VECTOR_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _record_hash(record: dict[str, Any]) -> str:
+    payload = {"document": record.get("document", ""), "metadata": record.get("metadata", {})}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _node_id(node: dict[str, Any]) -> str:
