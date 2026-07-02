@@ -174,3 +174,135 @@ def test_graph_relation_search_falls_back_to_dynamic_literal_when_graph_vectors_
 
     assert result["relation_paths"][0]["match_source"] == "dynamic_literal"
     assert result["relation_paths"][0]["graph_source"] == "dynamic_graph"
+
+
+def test_graph_relation_search_uses_llm_keyword_fallback_after_first_miss(tmp_path, monkeypatch):
+    from services.rag_api.graph import graph_search
+    from services.rag_api.vector import chroma_store
+
+    graph_file = tmp_path / "kb_graph.json"
+    graph_file.write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"id": "一渠一表", "label": "一渠一表", "type": "主题实体"},
+                    {"id": "项目报告", "label": "项目报告", "type": "来源文件"},
+                ],
+                "edges": [
+                    {
+                        "source": "项目报告",
+                        "target": "一渠一表",
+                        "label": "提及主题",
+                        "description": "项目报告提及一渠一表",
+                        "source_file": "report.docx",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(graph_search, "KB_GRAPH_PATH", graph_file, raising=False)
+    monkeypatch.setattr(graph_search, "search_graph_entities", lambda query, top_k: [])
+    monkeypatch.setattr(graph_search, "search_graph_relationships", lambda query, top_k: [])
+    monkeypatch.setattr(
+        graph_search,
+        "extract_query_keywords_with_llm",
+        lambda query: calls.append(query)
+        or {
+            "high_level_keywords": ["提及主题"],
+            "low_level_keywords": ["一渠一表"],
+            "fallback": False,
+        },
+    )
+    monkeypatch.setattr(chroma_store, "search_chunks_by_keywords", lambda query, intent, entities, top_k: [])
+
+    result = graph_search.graph_relation_search("这个报告在哪", "", top_k=2)
+
+    assert calls == ["这个报告在哪"]
+    assert result["relation_paths"][0]["path"] == "项目报告 -> 提及主题 -> 一渠一表"
+    assert result["relation_paths"][0]["match_source"] == "dynamic_literal_llm_keywords"
+    assert any(item["node"] == "keyword_extraction_fallback" for item in result["trace"])
+
+
+def test_graph_relation_search_does_not_call_llm_keyword_fallback_when_first_search_hits(tmp_path, monkeypatch):
+    from services.rag_api.graph import graph_search
+    from services.rag_api.vector import chroma_store
+
+    graph_file = tmp_path / "kb_graph.json"
+    graph_file.write_text(
+        json.dumps(
+            {
+                "nodes": [{"id": "一渠一表", "label": "一渠一表", "type": "主题实体"}],
+                "edges": [
+                    {
+                        "source": "报告",
+                        "target": "一渠一表",
+                        "label": "提及主题",
+                        "description": "报告提及一渠一表",
+                        "source_file": "report.docx",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(graph_search, "KB_GRAPH_PATH", graph_file, raising=False)
+    monkeypatch.setattr(graph_search, "search_graph_entities", lambda query, top_k: [{"id": "一渠一表", "score": 0.9}])
+    monkeypatch.setattr(graph_search, "search_graph_relationships", lambda query, top_k: [])
+    monkeypatch.setattr(
+        graph_search,
+        "extract_query_keywords_with_llm",
+        lambda query: (_ for _ in ()).throw(AssertionError("LLM keyword fallback should not run")),
+    )
+    monkeypatch.setattr(chroma_store, "search_chunks_by_keywords", lambda query, intent, entities, top_k: [])
+
+    result = graph_search.graph_relation_search("一渠一表在哪个报告", "", top_k=2)
+
+    assert result["relation_paths"]
+    assert not any(item["node"] == "keyword_extraction_fallback" for item in result["trace"])
+
+
+def test_graph_relation_search_calls_llm_keyword_fallback_at_most_once(tmp_path, monkeypatch):
+    from services.rag_api.graph import graph_search
+    from services.rag_api.vector import chroma_store
+
+    graph_file = tmp_path / "kb_graph.json"
+    graph_file.write_text(
+        json.dumps(
+            {
+                "nodes": [{"id": "无关实体", "label": "无关实体", "type": "主题实体"}],
+                "edges": [
+                    {
+                        "source": "无关实体",
+                        "target": "另一个实体",
+                        "label": "无关关系",
+                        "description": "没有匹配当前问题的关系",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(graph_search, "KB_GRAPH_PATH", graph_file, raising=False)
+    monkeypatch.setattr(graph_search, "search_graph_entities", lambda query, top_k: [])
+    monkeypatch.setattr(graph_search, "search_graph_relationships", lambda query, top_k: [])
+    monkeypatch.setattr(
+        graph_search,
+        "extract_query_keywords_with_llm",
+        lambda query: calls.append(query)
+        or {
+            "high_level_keywords": [],
+            "low_level_keywords": [],
+            "fallback": True,
+        },
+    )
+    monkeypatch.setattr(chroma_store, "search_chunks_by_keywords", lambda query, intent, entities, top_k: [])
+
+    graph_search.graph_relation_search("这个报告在哪", "", top_k=2)
+
+    assert calls == ["这个报告在哪"]

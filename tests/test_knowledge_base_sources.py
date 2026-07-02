@@ -16,7 +16,35 @@ def test_app_settings_default_knowledge_base_dirs(tmp_path, monkeypatch):
 
     settings = app_settings.load_app_settings()
 
-    assert settings.knowledge_base_dirs == [str((project_root / "docs").resolve())]
+    assert settings.knowledge_base_dirs == []
+
+
+def test_app_settings_preserves_empty_knowledge_base_dirs(tmp_path, monkeypatch):
+    from services.rag_api import app_settings
+
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(app_settings, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_PATH", project_root / "data" / "app_settings.json")
+
+    saved = app_settings.save_app_settings(app_settings.AppSettings(knowledge_base_dirs=[]))
+
+    assert saved.knowledge_base_dirs == []
+
+
+def test_runtime_settings_allows_empty_docs_dirs(tmp_path, monkeypatch):
+    from services.rag_api import app_settings, config
+
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(app_settings, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_PATH", project_root / "data" / "app_settings.json")
+    monkeypatch.setattr(config, "DEFAULT_DOCS_DIR", (project_root / "docs").resolve())
+    app_settings.save_app_settings(app_settings.AppSettings(knowledge_base_dirs=[]))
+    config.get_settings.cache_clear()
+
+    settings = config.get_settings()
+
+    assert settings.docs_dirs == []
+    assert settings.docs_dir == (project_root / "docs").resolve()
 
 
 def test_app_settings_saves_cleaned_knowledge_base_dirs(tmp_path, monkeypatch):
@@ -222,6 +250,25 @@ def test_frontend_empty_docs_directory_status_is_localized():
     assert "`无文件`,`No files`" in bundle
     assert "docs_dir_has_files?`存在`:`无文件`" in bundle
     assert "docs_dir_has_files?`已找到`:`无文件`" in bundle
+
+
+def test_frontend_chat_input_default_empty_and_enter_submit():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "企业客户办理地址迁移时，是否需要重新进行合规审核？" not in bundle
+    assert "[m,h]=(0,C.useState)(``)" in bundle
+    assert "placeholder:`输入问题，或输入/选择常用问题`" in bundle
+    assert "输入政企专线业务问题" not in bundle
+    assert "function s(e){if(e.key===`Enter`&&!e.shiftKey&&!e.altKey){" in bundle
+    assert "onKeyDown:s" in bundle
+    assert "e.currentTarget.value.trim()" in bundle
+
+
+def test_frontend_default_app_settings_have_empty_knowledge_base_dirs():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "knowledge_base_dirs:[]" in bundle
+    assert "knowledge_base_dirs:[`docs`]" not in bundle
 
 
 def test_frontend_graph_main_initial_layout_uses_radial_disk_layout():

@@ -73,7 +73,7 @@ DEFAULT_OUT_OF_SCOPE_KEYWORDS = [
 def default_knowledge_base_dirs() -> list[str]:
     env_value = docs_dirs_env_value()
     values = [item.strip() for item in env_value.split(";") if item.strip()] if env_value else []
-    return _normalize_dirs(values or [str(PROJECT_ROOT / "docs")])
+    return _normalize_dirs(values)
 
 
 class AppSettings(BaseModel):
@@ -200,8 +200,7 @@ def update_common_questions(questions: list[str]) -> list[str]:
 
 def effective_knowledge_base_dirs(settings: AppSettings | None = None) -> list[Path]:
     active = settings or load_app_settings()
-    dirs = active.knowledge_base_dirs or default_knowledge_base_dirs()
-    return [Path(item).resolve() for item in dirs]
+    return [Path(item).resolve() for item in active.knowledge_base_dirs]
 
 
 def _migrate_from_config_md() -> AppSettings:
@@ -269,7 +268,7 @@ def _normalize_dirs(values: list[str]) -> list[str]:
             result.append(normalized)
     if result:
         return result
-    return [str((PROJECT_ROOT / "docs").resolve())]
+    return []
 
 
 def _decode_sidebar_image(data_base64: str) -> bytes:

@@ -40,7 +40,7 @@ LEGACY_ENV_PATH = Path(r"D:\cd\.env")
 LEGACY_DOCS_DIR = Path(r"D:\cd\docs")
 ENV_PATH = resolve_env_file(PROJECT_DIR, LEGACY_ENV_PATH)
 DEFAULT_DOCS_DIRS = [Path(item).resolve() for item in default_knowledge_base_dirs()]
-DEFAULT_DOCS_DIR = DEFAULT_DOCS_DIRS[0] if DEFAULT_DOCS_DIRS else LEGACY_DOCS_DIR.resolve()
+DEFAULT_DOCS_DIR = DEFAULT_DOCS_DIRS[0] if DEFAULT_DOCS_DIRS else (PROJECT_DIR / "docs").resolve()
 LOCAL_QWEN_LLM_MODEL_DIR = PROJECT_DIR / "runtime" / "models" / "Qwen3___5-0___8B-ONNX"
 LOCAL_QWEN_EMBEDDING_MODEL_DIR = PROJECT_DIR / "runtime" / "models" / "Qwen3-Embedding-0___6B-ONNX"
 LOCAL_QWEN_RERANK_MODEL_DIR = PROJECT_DIR / "runtime" / "models" / "Qwen3-Reranker-0___6B-ONNX"
@@ -78,7 +78,7 @@ def get_settings() -> Settings:
     docs_dirs = effective_knowledge_base_dirs()
     use_local_models = effective_use_local_models()
     return Settings(
-        docs_dir=docs_dirs[0],
+        docs_dir=docs_dirs[0] if docs_dirs else DEFAULT_DOCS_DIR,
         docs_dirs=docs_dirs,
         use_local_models=use_local_models,
         api_key=effective_api_key(),

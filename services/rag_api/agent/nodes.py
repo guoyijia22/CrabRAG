@@ -12,7 +12,8 @@ from services.rag_api.agent.heuristics import (
     heuristic_classify as _heuristic_classify,
     heuristic_tool_choice as _heuristic_tool_choice,
 )
-from services.rag_api.agent.prompts import TOOL_CHOICE_PROMPT, build_answer_prompt, build_classify_prompt
+from services.rag_api.agent.prompts import build_answer_prompt, build_classify_prompt, build_tool_choice_prompt, detect_prompt_language
+from services.rag_api.agent.rag_context import build_rag_context
 from services.rag_api.agent.state import QAState
 from services.rag_api.agent.tools import VALID_TOOLS, dispatch_retrieval, tool_to_mode
 from services.rag_api.app_settings import load_app_settings
@@ -33,7 +34,9 @@ def classify_intent_node(state: QAState) -> QAState:
     categories = get_category_names()
     rag_settings = load_rag_settings()
     effective_question, rewrite_trace = rewrite_query_with_context(question, history, rag_settings)
+    prompt_language = detect_prompt_language(effective_question)
     trace = state.get("trace", []) + [{"node": "rag_settings", "output": rag_settings.model_dump()}]
+    trace.append({"node": "prompt_language", "output": {"language": prompt_language}})
     trace.append({"node": "context_rewrite", "output": rewrite_trace})
 
     scope = check_business_scope(effective_question, categories)
@@ -53,8 +56,8 @@ def classify_intent_node(state: QAState) -> QAState:
     try:
         content = chat_completion(
             [
-                {"role": "system", "content": build_classify_prompt(categories)},
-                {"role": "user", "content": f"历史上下文：{json.dumps(history, ensure_ascii=False)}\n用户问题：{effective_question}"},
+                {"role": "system", "content": build_classify_prompt(categories, language=prompt_language)},
+                {"role": "user", "content": _classification_user_content(history, effective_question, prompt_language)},
             ],
             temperature=0.0,
             max_tokens=500,
@@ -82,9 +85,10 @@ def choose_retrieval_tool_node(state: QAState) -> QAState:
         trace = state.get("trace", []) + [{"node": "agent_tool_choice", "output": {"selected_tool": "none", "retrieval_mode": "none", "reason": "查询范围外，跳过检索"}}]
         return {**state, "selected_tool": "none", "tool_choice_reason": "查询范围外，跳过检索", "retrieval_mode": "none", "trace": trace}
     try:
+        prompt_language = detect_prompt_language(state.get("effective_question", state["question"]))
         content = chat_completion(
             [
-                {"role": "system", "content": TOOL_CHOICE_PROMPT},
+                {"role": "system", "content": build_tool_choice_prompt(prompt_language)},
                 {
                     "role": "user",
                     "content": json.dumps(
@@ -147,16 +151,32 @@ def generate_answer_node(state: QAState) -> QAState:
         relation_paths,
         rag_settings,
     )
-    trace = state.get("trace", []) + [{"node": "context_token_budget", "output": budget_trace}]
+    prompt_language = detect_prompt_language(state.get("effective_question", state["question"]))
+    rag_context = build_rag_context(chunks, relation_paths)
+    trace = state.get("trace", []) + [
+        {"node": "context_token_budget", "output": budget_trace},
+        {
+            "node": "rag_context_builder",
+            "output": {
+                "prompt_language": prompt_language,
+                "chunk_count": len(chunks),
+                "relation_path_count": len(relation_paths),
+                "context_length": len(rag_context),
+            },
+        },
+    ]
     try:
-        prompt = build_answer_prompt().format(
-            question=state.get("effective_question", state["question"]),
-            retrieved_chunks=json.dumps(chunks, ensure_ascii=False),
-            relation_paths=json.dumps(relation_paths, ensure_ascii=False),
+        system_prompt = build_answer_prompt(language=prompt_language, context_data=rag_context)
+        answer = chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": state.get("effective_question", state["question"])},
+            ],
+            temperature=0.1,
+            max_tokens=1200,
         )
-        answer = chat_completion([{"role": "user", "content": prompt}], temperature=0.1, max_tokens=1200)
-        if "【参考知识库原文片段】" not in answer:
-            answer = _format_answer_from_chunks({**state, "retrieved_chunks": chunks}, answer)
+        if not _answer_has_reference_section(answer, prompt_language):
+            answer = _format_answer_from_chunks({**state, "retrieved_chunks": chunks}, answer, language=prompt_language)
         error = None
     except LLMServiceError:
         answer = LLM_ERROR_MESSAGE
@@ -186,9 +206,28 @@ def _normalize_classification(parsed: dict, question: str, categories: list[str]
     return {"intent": intent, "question_type": question_type, "retrieval_mode": retrieval_mode, "entities": _dedupe(entities)}
 
 
-def _format_answer_from_chunks(state: QAState, answer: str) -> str:
+def _classification_user_content(history: list[dict[str, str]], question: str, language: str) -> str:
+    if language == "en":
+        return f"Conversation history: {json.dumps(history, ensure_ascii=False)}\nUser question: {question}"
+    return f"历史上下文：{json.dumps(history, ensure_ascii=False)}\n用户问题：{question}"
+
+
+def _answer_has_reference_section(answer: str, language: str) -> bool:
+    return "### References" in answer if language == "en" else "【参考知识库原文片段】" in answer
+
+
+def _format_answer_from_chunks(state: QAState, answer: str, language: str | None = None) -> str:
+    question = state.get("effective_question") or state.get("question") or ""
+    active_language = language or (detect_prompt_language(question) if question else "zh")
+    chunks = state.get("retrieved_chunks", [])[:get_retrieval_top_k()]
+    if active_language == "en":
+        refs = "\n".join(
+            f"- [{i}] {chunk.get('source_file', '')}"
+            for i, chunk in enumerate(chunks, start=1)
+        )
+        return f"## Category\n{state.get('intent', '')}\n\n## Answer\n{answer.strip()}\n\n### References\n{refs}"
     refs = "\n\n".join(
         f"{i}. 来源：《{chunk.get('source_file', '')}》\n原文片段：{chunk.get('content', '')}"
-        for i, chunk in enumerate(state.get("retrieved_chunks", [])[:get_retrieval_top_k()], start=1)
+        for i, chunk in enumerate(chunks, start=1)
     )
     return f"【业务类别】\n{state.get('intent', '')}\n\n【答复】\n{answer.strip()}\n\n【参考知识库原文片段】\n{refs}"

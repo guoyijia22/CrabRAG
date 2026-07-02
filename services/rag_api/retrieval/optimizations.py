@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 
+from services.rag_api.agent.prompts import detect_prompt_language
 from services.rag_api.config import get_settings
 from services.rag_api.llm import local_onnx_rerank
 from services.rag_api.llm.siliconflow_client import chat_completion
@@ -16,11 +17,18 @@ def rewrite_query_with_context(query: str, history: list[dict[str, str]], settin
     if not settings.context_rewrite_enabled or not history:
         return query, trace
     history_text = "\n".join(f"{item.get('role', '')}: {item.get('content', '')}" for item in history[-6:])
-    prompt = (
-        "根据对话历史和当前问题，生成一个独立的、包含所有必要信息的完整查询。"
-        "只输出完整查询，不要解释。\n\n"
-        f"对话历史：\n{history_text}\n\n当前问题：{query}\n\n完整查询："
-    )
+    if detect_prompt_language(query) == "en":
+        prompt = (
+            "Based on the conversation history and current question, generate a standalone, complete query "
+            "that includes all necessary context. Only output the complete query. Do not explain.\n\n"
+            f"Conversation history:\n{history_text}\n\nCurrent question: {query}\n\nComplete query:"
+        )
+    else:
+        prompt = (
+            "根据对话历史和当前问题，生成一个独立的、包含所有必要信息的完整查询。"
+            "只输出完整查询，不要解释。\n\n"
+            f"对话历史：\n{history_text}\n\n当前问题：{query}\n\n完整查询："
+        )
     try:
         rewritten = chat_completion([{"role": "user", "content": prompt}], temperature=0.0, max_tokens=300).strip()
         if rewritten:
@@ -35,11 +43,18 @@ def apply_query_expansion(query: str, settings: RagSettings) -> tuple[list[str],
     trace = {"enabled": settings.query_expansion_enabled, "fallback": False, "queries": [query]}
     if not settings.query_expansion_enabled:
         return [query], trace
-    prompt = (
-        "请根据用户原始问题，生成最多3个语义相近但表述不同的扩展查询。"
-        "每个扩展查询单独一行，不要解释。\n\n"
-        f"原始问题：{query}"
-    )
+    if detect_prompt_language(query) == "en":
+        prompt = (
+            "Generate up to 3 semantically similar but differently worded expansion queries from the original user question. "
+            "Put each expansion query on its own line. Do not explain.\n\n"
+            f"Original question: {query}"
+        )
+    else:
+        prompt = (
+            "请根据用户原始问题，生成最多3个语义相近但表述不同的扩展查询。"
+            "每个扩展查询单独一行，不要解释。\n\n"
+            f"原始问题：{query}"
+        )
     try:
         content = chat_completion([{"role": "user", "content": prompt}], temperature=0.0, max_tokens=400)
         expanded = [line.strip(" -\t\r\n") for line in content.splitlines() if line.strip()]
