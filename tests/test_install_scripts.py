@@ -20,6 +20,9 @@ def test_cross_platform_install_scripts_are_source_install_friendly():
     assert "pip install -r requirements.txt" in install_ps1
     assert "bun install" in install_ps1
     assert "runtime\\bun\\bun.exe" in install_ps1
+    assert "Install-PortableBun" in install_ps1
+    assert "bun-windows-x64.zip" in install_ps1
+    assert "project-local Bun" in install_ps1
     assert "config\\.env" in install_ps1
     assert "Test-Path $EnvPath" in install_ps1
     assert "PIP_INDEX_URL" in install_ps1
@@ -32,6 +35,10 @@ def test_cross_platform_install_scripts_are_source_install_friendly():
     assert "pip install -r requirements.txt" in install_sh
     assert "bun install" in install_sh
     assert "runtime/bun/bun" in install_sh
+    assert "install_portable_bun" in install_sh
+    assert "bun-linux-x64.zip" in install_sh
+    assert "bun-linux-aarch64.zip" in install_sh
+    assert "project-local Bun" in install_sh
     assert "config/.env" in install_sh
     assert '[ -f "$ENV_FILE" ]' in install_sh
     assert "PIP_INDEX_URL" in install_sh

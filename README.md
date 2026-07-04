@@ -10,10 +10,9 @@ Default URLs:
 ## Requirements
 
 - Python 3.10 or newer
-- Bun on `PATH`
 - Internet access during dependency installation
 
-Node.js, npm, and pnpm are detected for diagnostics, but the bundled web gateway uses Bun.
+The installer uses Bun for the bundled web gateway. If Bun is not on `PATH`, the installer downloads a project-local Bun binary into `runtime/bun/`. Node.js, npm, and pnpm are detected for diagnostics only.
 
 ## Windows Install
 
@@ -57,13 +56,7 @@ sudo apt update && sudo apt install -y python3 python3-venv python3-pip
 sudo dnf install -y python3 python3-pip
 ```
 
-Install Bun if needed:
-
-```bash
-curl -fsSL https://bun.sh/install | bash
-```
-
-Restart your shell after installing Bun so `bun` is on `PATH`.
+If Bun is not on `PATH`, the installer downloads a project-local Bun binary into `runtime/bun/`.
 
 ## Configuration
 
@@ -120,8 +113,10 @@ Reinstall Python dependencies:
 Reinstall JavaScript dependencies:
 
 ```bash
-bun install
+runtime/bun/bun install
 ```
+
+On Windows, use `runtime\bun\bun.exe install`.
 
 To rebuild from a clean virtual environment, delete `.venv` and rerun the installer:
 
@@ -140,7 +135,7 @@ Do not delete `data/`, `docs/`, or `config/.env` unless you intentionally want t
 ## Troubleshooting
 
 - `Python 3.10+ was not found`: install Python 3.10 or newer and rerun the installer.
-- `Bun was not found`: install Bun and restart the terminal.
+- `Failed to install project-local Bun`: check network access to GitHub releases, or install Bun manually from <https://bun.sh/docs/installation>.
 - `Local ONNX runtime unavailable`: remote/API mode can still run. Install the correct ONNX runtime only if you need local embedding or rerank models.
 - `API port 8001 is already in use`: stop the process using that port or change the API port.
 - `Web port 3003 is already in use`: stop the process using that port or start with another port.

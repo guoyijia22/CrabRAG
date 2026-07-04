@@ -15,6 +15,7 @@ REQUIREMENTS="$ROOT/requirements.txt"
 ENV_EXAMPLE="$ROOT/config/.env.example"
 ENV_FILE="$ROOT/config/.env"
 PORTABLE_BUN="$ROOT/runtime/bun/bun"
+PORTABLE_BUN_DIR="$ROOT/runtime/bun"
 
 log() {
   printf '[CrabRAG] %s\n' "$1"
@@ -68,7 +69,47 @@ resolve_bun_for_install() {
     command -v bun
     return 0
   fi
-  fail "bun was not found. Install Bun with: curl -fsSL https://bun.sh/install | bash"
+  install_portable_bun
+  if [[ -x "$PORTABLE_BUN" ]]; then
+    printf '%s\n' "$PORTABLE_BUN"
+    return 0
+  fi
+  fail "Failed to install project-local Bun. Install Bun with: curl -fsSL https://bun.sh/install | bash"
+}
+
+install_portable_bun() {
+  local arch bun_archive
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) bun_archive="bun-linux-x64.zip" ;;
+    aarch64|arm64) bun_archive="bun-linux-aarch64.zip" ;;
+    *) fail "Unsupported CPU architecture for automatic Bun download: $arch" ;;
+  esac
+  log "Bun was not found. Downloading project-local Bun to runtime/bun."
+  mkdir -p "$PORTABLE_BUN_DIR"
+  "$VENV_PYTHON" - "$bun_archive" "$PORTABLE_BUN" <<'PY'
+from pathlib import Path
+import os
+import shutil
+import stat
+import sys
+import tempfile
+import urllib.request
+import zipfile
+
+archive_name = sys.argv[1]
+target = Path(sys.argv[2])
+url = f"https://github.com/oven-sh/bun/releases/latest/download/{archive_name}"
+with tempfile.TemporaryDirectory() as temp_dir:
+    archive = Path(temp_dir) / "bun.zip"
+    urllib.request.urlretrieve(url, archive)
+    with zipfile.ZipFile(archive) as zf:
+        member = next(name for name in zf.namelist() if name.endswith("/bun") or name == "bun")
+        extracted = Path(zf.extract(member, temp_dir))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(extracted, target)
+        target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+PY
 }
 
 use_safe_pip_index_if_needed() {

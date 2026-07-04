@@ -34,6 +34,7 @@ $Requirements = Join-Path $Root "requirements.txt"
 $EnvExample = Join-Path $Root "config\.env.example"
 $EnvPath = Join-Path $Root "config\.env"
 $PortableBun = Join-Path $Root "runtime\bun\bun.exe"
+$PortableBunDir = Join-Path $Root "runtime\bun"
 
 function Test-PythonCandidate {
     param(
@@ -88,7 +89,41 @@ function Resolve-BunForInstall {
     if (Test-Path $PortableBun) {
         return $PortableBun
     }
-    return Require-Command -Name "bun" -InstallHint "Install Bun from https://bun.sh/docs/installation and make sure it is on PATH."
+    $command = Get-Command "bun" -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    Install-PortableBun
+    if (Test-Path $PortableBun) {
+        return $PortableBun
+    }
+    Fail "Failed to install project-local Bun. Install Bun from https://bun.sh/docs/installation and rerun .\install.ps1."
+}
+
+function Install-PortableBun {
+    Write-Step "Bun was not found. Downloading project-local Bun to runtime\bun."
+    New-Item -ItemType Directory -Path $PortableBunDir -Force | Out-Null
+    $archive = Join-Path ([System.IO.Path]::GetTempPath()) "crabrag-bun-$PID.zip"
+    $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) "crabrag-bun-$PID"
+    try {
+        Invoke-WebRequest -Uri "https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip" -OutFile $archive
+        Expand-Archive -LiteralPath $archive -DestinationPath $extractDir -Force
+        $bunExe = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter "bun.exe" | Select-Object -First 1
+        if ($null -eq $bunExe) {
+            Fail "Downloaded Bun archive did not contain bun.exe."
+        }
+        Copy-Item -LiteralPath $bunExe.FullName -Destination $PortableBun -Force
+    } catch {
+        Fail "Failed to download project-local Bun."
+    } finally {
+        if (Test-Path -LiteralPath $archive) {
+            Remove-Item -LiteralPath $archive -Force
+        }
+        if (Test-Path -LiteralPath $extractDir) {
+            Remove-Item -LiteralPath $extractDir -Recurse -Force
+        }
+    }
 }
 
 function Use-SafePipIndexIfNeeded {
