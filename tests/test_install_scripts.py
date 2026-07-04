@@ -48,6 +48,21 @@ def test_cross_platform_install_scripts_are_source_install_friendly():
     assert "dnf install" in install_sh or "yum install" in install_sh
 
 
+def test_linux_installation_paths_are_hardened_for_source_clones():
+    install_sh = read_text("install.sh")
+    run_sh = read_text("run.sh")
+    local_qwen = read_text("services/rag_api/llm/local_qwen_llm.py")
+    gitattributes = read_text(".gitattributes")
+
+    assert "*.sh text eol=lf" in gitattributes
+    assert "if ! \"$VENV_PYTHON\" - \"$bun_archive\" \"$PORTABLE_BUN\"" in install_sh
+    assert "Failed to download project-local Bun" in install_sh
+    assert "runtime/bun/bun" in run_sh
+    assert '"bun.exe"' in local_qwen
+    assert '"bun"' in local_qwen
+    assert "shutil.which(\"bun\")" in local_qwen
+
+
 def test_run_scripts_start_api_and_gateway_with_project_environment():
     run_ps1 = read_text("run.ps1")
     run_sh = read_text("run.sh")

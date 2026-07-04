@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import uuid
@@ -130,8 +131,7 @@ class _QwenWorker:
     def _ensure_process(self) -> subprocess.Popen[str]:
         if self._process is not None and self._process.poll() is None:
             return self._process
-        bun = PROJECT_DIR / "runtime" / "bun" / "bun.exe"
-        bun_command = str(bun) if bun.exists() else "bun"
+        bun_command = _resolve_bun_command()
         if not WORKER_PATH.exists():
             raise LLMServiceError(f"本地大语言模型 worker 文件缺失：{WORKER_PATH}")
         env = os.environ.copy()
@@ -190,6 +190,14 @@ class _QwenWorker:
 def _clean_generated_text(text: str) -> str:
     text = re.sub(r"^\s*<think>\s*</think>\s*", "", text, flags=re.S)
     return text.strip()
+
+
+def _resolve_bun_command() -> str:
+    for name in ("bun.exe", "bun"):
+        candidate = PROJECT_DIR / "runtime" / "bun" / name
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("bun") or "bun"
 
 
 atexit.register(shutdown_local_qwen_worker)

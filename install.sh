@@ -87,7 +87,7 @@ install_portable_bun() {
   esac
   log "Bun was not found. Downloading project-local Bun to runtime/bun."
   mkdir -p "$PORTABLE_BUN_DIR"
-  "$VENV_PYTHON" - "$bun_archive" "$PORTABLE_BUN" <<'PY'
+  if ! "$VENV_PYTHON" - "$bun_archive" "$PORTABLE_BUN" <<'PY'
 from pathlib import Path
 import os
 import shutil
@@ -110,6 +110,9 @@ with tempfile.TemporaryDirectory() as temp_dir:
         shutil.copy2(extracted, target)
         target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 PY
+  then
+    fail "Failed to download project-local Bun. Check network access to GitHub releases or install Bun manually."
+  fi
 }
 
 use_safe_pip_index_if_needed() {
