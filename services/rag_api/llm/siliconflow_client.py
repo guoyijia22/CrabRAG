@@ -7,7 +7,6 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from services.rag_api.config import get_settings
 from services.rag_api.exceptions import LLMServiceError
-from services.rag_api.llm import local_onnx_embedding, local_qwen_llm
 
 
 @lru_cache(maxsize=1)
@@ -42,6 +41,7 @@ def chat_completion(messages: list[dict[str, str]], temperature: float = 0.1, ma
     settings = get_settings()
     if settings.use_local_models:
         try:
+            local_qwen_llm = _local_qwen_llm_module()
             return local_qwen_llm.chat_completion_local(
                 messages,
                 settings.local_llm_model_dir,
@@ -68,6 +68,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         return []
     if settings.embedding_provider == "local_onnx":
         try:
+            local_onnx_embedding = _local_onnx_embedding_module()
             return local_onnx_embedding.embed_texts_local(
                 texts,
                 settings.local_embedding_model_dir,
@@ -81,3 +82,15 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         return [item.embedding for item in response.data]
     except Exception as exc:  # noqa: BLE001
         raise _translate_error(exc) from exc
+
+
+def _local_qwen_llm_module():
+    from services.rag_api.llm import local_qwen_llm
+
+    return local_qwen_llm
+
+
+def _local_onnx_embedding_module():
+    from services.rag_api.llm import local_onnx_embedding
+
+    return local_onnx_embedding

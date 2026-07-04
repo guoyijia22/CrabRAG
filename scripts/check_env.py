@@ -41,6 +41,7 @@ def find_bun() -> str | None:
 
 def main() -> int:
     errors: list[str] = []
+    optional_warnings: list[str] = []
 
     if sys.version_info < (3, 10):
         errors.append("Python 3.10+ is required.")
@@ -53,9 +54,14 @@ def main() -> int:
         "chromadb",
         "requests",
         "numpy",
-        "onnxruntime",
     ]:
         check_import(module_name, errors)
+
+    try:
+        importlib.import_module("onnxruntime")
+        optional_warnings.append("Local ONNX runtime available.")
+    except Exception as exc:  # pragma: no cover - message is for humans.
+        optional_warnings.append(f"Local ONNX runtime unavailable: {exc}")
 
     for relative_path in [
         "config/.env",
@@ -81,6 +87,8 @@ def main() -> int:
             print(f"  - {error}")
         return 1
 
+    for warning in optional_warnings:
+        print(f"[CrabRAG] Optional: {warning}")
     print("[CrabRAG] Environment check passed.")
     return 0
 

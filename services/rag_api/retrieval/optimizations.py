@@ -7,7 +7,6 @@ import requests
 
 from services.rag_api.agent.prompts import detect_prompt_language
 from services.rag_api.config import get_settings
-from services.rag_api.llm import local_onnx_rerank
 from services.rag_api.llm.siliconflow_client import chat_completion
 from services.rag_api.rag_settings import RagSettings
 
@@ -117,6 +116,7 @@ def _apply_local_rerank(query: str, chunks: list[dict], top_k: int, trace: dict[
     app_settings = get_settings()
     documents = [chunk.get("content", "") for chunk in chunks]
     try:
+        local_onnx_rerank = _local_onnx_rerank_module()
         results = local_onnx_rerank.rerank_documents_local(
             query,
             documents,
@@ -138,6 +138,12 @@ def _apply_local_rerank(query: str, chunks: list[dict], top_k: int, trace: dict[
         trace["fallback"] = True
         trace["error"] = str(exc)
     return chunks[:top_k], trace
+
+
+def _local_onnx_rerank_module():
+    from services.rag_api.llm import local_onnx_rerank
+
+    return local_onnx_rerank
 
 
 def _tokenize(query: str) -> list[str]:

@@ -86,6 +86,7 @@ runtime/models/
 ```
 
 The Settings page reports missing model files and shows the matching ModelScope or Hugging Face download links.
+The ONNX runtime is only required when local embedding or rerank models are enabled. Remote/API mode can start even if ONNX runtime is unavailable on the current machine.
 
 ## Smoke Check
 
@@ -102,6 +103,7 @@ or on Linux:
 ```
 
 The check verifies key Python imports, `config/.env`, required directories, the built web UI, the gateway entrypoint, and Bun availability.
+It may print an optional warning when ONNX runtime cannot be imported; that warning does not block remote/API mode.
 
 ## Reinstall Dependencies
 
@@ -139,6 +141,7 @@ Do not delete `data/`, `docs/`, or `config/.env` unless you intentionally want t
 
 - `Python 3.10+ was not found`: install Python 3.10 or newer and rerun the installer.
 - `Bun was not found`: install Bun and restart the terminal.
+- `Local ONNX runtime unavailable`: remote/API mode can still run. Install the correct ONNX runtime only if you need local embedding or rerank models.
 - `API port 8001 is already in use`: stop the process using that port or change the API port.
 - `Web port 3003 is already in use`: stop the process using that port or start with another port.
 - `config/.env is missing`: rerun the installer or copy `config/.env.example` to `config/.env`.

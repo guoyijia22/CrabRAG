@@ -86,6 +86,7 @@ runtime/models/
 ```
 
 设置页会检测缺失的模型文件，并根据当前语言显示对应的 ModelScope 或 Hugging Face 下载链接。
+ONNX runtime 只在启用本地向量模型或本地重排模型时需要。远程/API 模式下，即使当前机器无法导入 ONNX runtime，也不应影响项目启动。
 
 ## 安装检测
 
@@ -102,6 +103,7 @@ Linux：
 ```
 
 检测内容包括关键 Python 包、`config/.env`、必要目录、已打包 Web 界面、网关入口和 Bun 是否可用。
+如果看到 ONNX runtime 不可用的可选警告，表示本地 ONNX 模型能力不可用，但不会阻断远程/API 模式运行。
 
 ## 重新安装依赖
 
@@ -139,6 +141,7 @@ rm -rf .venv
 
 - `Python 3.10+ was not found`：安装 Python 3.10 或更高版本，然后重新运行安装脚本。
 - `Bun was not found`：安装 Bun，并重启终端。
+- `Local ONNX runtime unavailable`：远程/API 模式仍可运行；只有需要本地向量或本地重排模型时才需要修复 ONNX runtime。
 - `API port 8001 is already in use`：停止占用该端口的进程，或改用其他 API 端口。
 - `Web port 3003 is already in use`：停止占用该端口的进程，或改用其他 Web 端口。
 - `config/.env is missing`：重新运行安装脚本，或手动复制 `config/.env.example` 为 `config/.env`。

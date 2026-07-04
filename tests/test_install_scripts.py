@@ -90,7 +90,27 @@ def test_installation_metadata_and_smoke_check_are_documented():
 
     assert "check_import" in check_env
     assert '"onnxruntime"' in check_env
+    assert "optional_warnings" in check_env
+    assert "Local ONNX runtime unavailable" in check_env
     assert "config/.env" in check_env
     assert "apps/web/dist/index.html" in check_env
     assert "server/gateway.js" in check_env
     assert "bun" in check_env
+
+
+def test_remote_api_mode_imports_main_without_importing_onnxruntime():
+    source_files = [
+        read_text("services/rag_api/llm/siliconflow_client.py"),
+        read_text("services/rag_api/retrieval/optimizations.py"),
+        read_text("services/rag_api/llm/local_onnx_embedding.py"),
+        read_text("services/rag_api/llm/local_onnx_rerank.py"),
+    ]
+
+    assert "from services.rag_api.llm import local_onnx_embedding, local_qwen_llm" not in source_files[0].split("def _local_qwen_llm_module()", 1)[0]
+    assert "from services.rag_api.llm import local_onnx_rerank" not in source_files[1].split("def _local_onnx_rerank_module()", 1)[0]
+    assert "def _local_onnx_embedding_module()" in source_files[0]
+    assert "def _local_onnx_rerank_module()" in source_files[1]
+    assert "import onnxruntime as ort" not in source_files[2]
+    assert "import onnxruntime as ort" not in source_files[3]
+    assert "def _load_onnxruntime()" in source_files[2]
+    assert "def _load_onnxruntime()" in source_files[3]

@@ -177,7 +177,7 @@ def test_local_rerank_model_loads_selected_onnx_file_from_onnx_subdir(monkeypatc
             return [FakeInput()]
 
     monkeypatch.setattr(local_onnx_rerank.Tokenizer, "from_file", lambda path: FakeTokenizer())
-    monkeypatch.setattr(local_onnx_rerank.ort, "InferenceSession", FakeSession)
+    monkeypatch.setattr(local_onnx_rerank, "_load_onnxruntime", lambda: type("FakeOrt", (), {"InferenceSession": FakeSession}))
     local_onnx_rerank.get_local_rerank_model.cache_clear()
 
     local_onnx_rerank.get_local_rerank_model(str(tmp_path), "model_int8.onnx")
@@ -209,6 +209,34 @@ def test_local_rerank_missing_selected_onnx_file_names_file(tmp_path: Path):
         validate_local_rerank_model_dir(tmp_path, "model_int8.onnx")
 
 
+def test_local_rerank_lazy_onnxruntime_import_failure_is_clear(monkeypatch, tmp_path: Path):
+    from services.rag_api.llm import local_onnx_rerank
+    from services.rag_api.exceptions import LLMServiceError
+
+    for name in ("tokenizer.json", "tokenizer_config.json", "config.json"):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    (tmp_path / "onnx").mkdir()
+    (tmp_path / "onnx" / "model_q4.onnx").write_bytes(b"q4")
+
+    class FakeTokenizer:
+        def enable_truncation(self, max_length):
+            pass
+
+        def token_to_id(self, token):
+            return 0 if token == "<pad>" else None
+
+    monkeypatch.setattr(local_onnx_rerank.Tokenizer, "from_file", lambda path: FakeTokenizer())
+    monkeypatch.setattr(
+        local_onnx_rerank,
+        "_load_onnxruntime",
+        lambda: (_ for _ in ()).throw(LLMServiceError("本地 ONNX runtime 不可用：DLL 初始化失败")),
+    )
+    local_onnx_rerank.get_local_rerank_model.cache_clear()
+
+    with pytest.raises(LLMServiceError, match="本地 ONNX runtime 不可用"):
+        local_onnx_rerank.get_local_rerank_model(str(tmp_path), "model_q4.onnx")
+
+
 def test_apply_rerank_uses_local_provider_without_http(monkeypatch, tmp_path: Path):
     chunks = [
         {"content": "普通材料", "source_file": "a.txt", "score": 0.4},
@@ -226,8 +254,11 @@ def test_apply_rerank_uses_local_provider_without_http(monkeypatch, tmp_path: Pa
         assert onnx_model_file == "model_int8.onnx"
         return [{"index": 1, "relevance_score": 0.91}, {"index": 0, "relevance_score": 0.52}]
 
+    class FakeLocalRerankModule:
+        rerank_documents_local = staticmethod(fake_rerank)
+
     monkeypatch.setattr(optimizations.requests, "post", fail_post)
-    monkeypatch.setattr(optimizations.local_onnx_rerank, "rerank_documents_local", fake_rerank)
+    monkeypatch.setattr(optimizations, "_local_onnx_rerank_module", lambda: FakeLocalRerankModule)
     monkeypatch.setattr(
         optimizations,
         "get_settings",

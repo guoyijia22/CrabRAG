@@ -154,7 +154,7 @@ def test_local_embedding_model_loads_selected_onnx_file_from_onnx_subdir(monkeyp
             return [FakeInput()]
 
     monkeypatch.setattr(local_onnx_embedding.Tokenizer, "from_file", lambda path: FakeTokenizer())
-    monkeypatch.setattr(local_onnx_embedding.ort, "InferenceSession", FakeSession)
+    monkeypatch.setattr(local_onnx_embedding, "_load_onnxruntime", lambda: type("FakeOrt", (), {"InferenceSession": FakeSession}))
     local_onnx_embedding.get_local_embedding_model.cache_clear()
 
     local_onnx_embedding.get_local_embedding_model(str(tmp_path), "model_int8.onnx")
@@ -185,7 +185,36 @@ def test_local_embedding_missing_selected_onnx_file_names_file(tmp_path: Path):
         validate_local_model_dir(tmp_path, "model_int8.onnx")
 
 
+def test_local_embedding_lazy_onnxruntime_import_failure_is_clear(monkeypatch, tmp_path: Path):
+    from services.rag_api.llm import local_onnx_embedding
+
+    for name in ("tokenizer.json", "tokenizer_config.json", "config.json"):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    (tmp_path / "onnx").mkdir()
+    (tmp_path / "onnx" / "model_int8.onnx").write_bytes(b"int8")
+
+    class FakeTokenizer:
+        def enable_truncation(self, max_length):
+            pass
+
+    monkeypatch.setattr(local_onnx_embedding.Tokenizer, "from_file", lambda path: FakeTokenizer())
+    monkeypatch.setattr(
+        local_onnx_embedding,
+        "_load_onnxruntime",
+        lambda: (_ for _ in ()).throw(LLMServiceError("本地 ONNX runtime 不可用：DLL 初始化失败")),
+    )
+    local_onnx_embedding.get_local_embedding_model.cache_clear()
+
+    with pytest.raises(LLMServiceError, match="本地 ONNX runtime 不可用"):
+        local_onnx_embedding.get_local_embedding_model(str(tmp_path), "model_int8.onnx")
+
+
 def test_embed_texts_uses_local_provider_without_embedding_client(monkeypatch):
+    class FakeLocalEmbeddingModule:
+        @staticmethod
+        def embed_texts_local(texts, model_dir, onnx_model_file):
+            return [[1.0] + [0.0] * 767 for _ in texts]
+
     monkeypatch.setattr(
         siliconflow_client,
         "get_settings",
@@ -198,11 +227,7 @@ def test_embed_texts_uses_local_provider_without_embedding_client(monkeypatch):
             embedding_onnx_model_file="model_int8.onnx",
         ),
     )
-    monkeypatch.setattr(
-        siliconflow_client.local_onnx_embedding,
-        "embed_texts_local",
-        lambda texts, model_dir, onnx_model_file: [[1.0] + [0.0] * 767 for _ in texts],
-    )
+    monkeypatch.setattr(siliconflow_client, "_local_onnx_embedding_module", lambda: FakeLocalEmbeddingModule)
     monkeypatch.setattr(
         siliconflow_client,
         "get_embedding_client",

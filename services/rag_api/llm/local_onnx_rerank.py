@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import importlib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import onnxruntime as ort
 from tokenizers import Tokenizer
 
 from services.rag_api.exceptions import LLMServiceError
@@ -124,8 +124,15 @@ def get_local_rerank_model(model_dir: str, onnx_model_file: str = "model.onnx") 
     model_path = validate_local_rerank_model_dir(path, onnx_model_file)
     tokenizer = Tokenizer.from_file(str(path / "tokenizer.json"))
     tokenizer.enable_truncation(max_length=512)
-    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    session = _load_onnxruntime().InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
     return LocalOnnxRerankModel(tokenizer, session)
+
+
+def _load_onnxruntime() -> Any:
+    try:
+        return importlib.import_module("onnxruntime")
+    except Exception as exc:  # noqa: BLE001
+        raise LLMServiceError(f"本地 ONNX runtime 不可用：{exc}") from exc
 
 
 def _resolve_onnx_model_path(model_dir: Path, onnx_model_file: str) -> Path:

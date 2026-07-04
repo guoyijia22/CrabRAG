@@ -145,14 +145,14 @@ def test_crabrag_cli_entry_exists_and_uses_crabrag_root():
 
 def test_default_web_port_is_3003():
     gateway_text = Path("server/gateway.js").read_text(encoding="utf-8")
-    start_text = Path("runtime/portable_start.ps1").read_text(encoding="utf-8")
+    run_text = Path("run.ps1").read_text(encoding="utf-8")
     api_text = Path("services/rag_api/main.py").read_text(encoding="utf-8")
     readme_text = Path("README_PORTABLE.md").read_text(encoding="utf-8")
 
     assert "process.env.PORT ?? 3003" in gateway_text
-    assert "`$env:PORT='3003'" in start_text
-    assert 'port = 3003' in start_text
-    assert "Web system: http://127.0.0.1:3003" in start_text
+    assert "[int]$WebPort = 3003" in run_text
+    assert '$env:PORT = "$WebPort"' in run_text
+    assert "http://127.0.0.1:$WebPort/" in run_text
     assert "http://127.0.0.1:3003" in api_text
     assert "http://127.0.0.1:3003" in readme_text
 
