@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.rag_api.document.categories import DEFAULT_CATEGORIES, get_category_names
+from services.rag_api.document.categories import get_category_names
 from services.rag_api.graph.graph_search import extract_entities
 
 QUESTION_TYPES = ["单一规则", "流程步骤", "标准查询", "资费标准", "关联推理"]
@@ -8,7 +8,7 @@ GRAPH_CORE_INTENTS = ["业务变更", "合规审核", "故障报修", "退订销
 
 
 def heuristic_classify(question: str, history: list[dict], categories: list[str] | None = None) -> dict:
-    categories = categories or get_category_names()
+    categories = get_category_names() if categories is None else categories
     expanded = question
     if any(word in question for word in ["这个", "那这种情况", "如果是这样", "如果是"]) and history:
         expanded = f"{history[-1].get('content', '')} {question}"
@@ -25,14 +25,14 @@ def heuristic_classify(question: str, history: list[dict], categories: list[str]
     ]
     for intent, question_type, retrieval_mode, keywords, extra_entities in candidates:
         if any(word in expanded for word in keywords):
-            normalized_intent = intent if intent in categories else closest_category(intent, categories) or (categories[0] if categories else DEFAULT_CATEGORIES[0])
+            normalized_intent = intent if intent in categories else closest_category(intent, categories) or (categories[0] if categories else "")
             return {
                 "intent": normalized_intent,
                 "question_type": question_type,
                 "retrieval_mode": retrieval_mode,
                 "entities": extract_entities(expanded) + extra_entities,
             }
-    default_intent = "客户准入" if "客户准入" in categories else (categories[0] if categories else DEFAULT_CATEGORIES[0])
+    default_intent = "客户准入" if "客户准入" in categories else (categories[0] if categories else "")
     return {"intent": default_intent, "question_type": "单一规则", "retrieval_mode": "vector", "entities": extract_entities(expanded)}
 
 

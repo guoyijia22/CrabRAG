@@ -21,7 +21,7 @@ from services.rag_api.vector.chroma_store import embedding_batch_count, upsert_c
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
-def ingest_knowledge_base(progress_callback: ProgressCallback | None = None) -> dict:
+def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, full_rebuild: bool = False) -> dict:
     total_units = 7
 
     def progress(completed_units: int, current_step: str, message: str, **extra: Any) -> None:
@@ -57,6 +57,12 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None) -> 
     duplicate_count = 0
     failed_count = 0
     records = dict(manifest.get("documents", {}))
+
+    if full_rebuild:
+        for doc_id, previous in records.items():
+            delete_chunk_ids.extend(str(chunk_id) for chunk_id in previous.get("chunk_ids", []) if chunk_id)
+            doc_status.delete_snapshot(doc_id)
+        records = {}
 
     for removed_doc_id in sorted(set(records) - current_doc_ids):
         previous = records.pop(removed_doc_id)
@@ -186,7 +192,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None) -> 
     doc_status.save_manifest({"version": 1, "documents": records})
     return {
         "status": "success",
-        "incremental": True,
+        "incremental": not full_rebuild,
         "kb_dir": str(docs_dirs[0]),
         "kb_dirs": [str(path) for path in docs_dirs],
         "document_count": len(documents),

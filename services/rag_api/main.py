@@ -86,6 +86,11 @@ def run_ingest() -> dict:
     return start_ingest_run()
 
 
+@app.post("/api/ingest/full")
+def full_ingest() -> dict:
+    return start_ingest_run(full_rebuild=True)
+
+
 @app.get("/api/ingest/active")
 def active_ingest() -> dict:
     return get_active_ingest_progress()

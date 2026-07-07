@@ -30,3 +30,15 @@ def test_business_scope_matches_source_file_topics(monkeypatch):
     assert result["in_scope"] is True
     assert "一渠一表" in result["matched_kb_terms"]
     assert "关于一渠一表调研报告.docx" in result["matched_source_files"]
+
+
+def test_app_settings_business_scope_defaults_are_general():
+    from services.rag_api.app_settings import AppSettings
+
+    settings = AppSettings()
+
+    assert settings.scope_min_score == 0
+    assert settings.in_scope_keywords == []
+    assert settings.out_of_scope_keywords == ["股票", "Stock"]
+    assert "knowledge base" in settings.business_scope_description
+    assert "知识库" in settings.business_scope_description

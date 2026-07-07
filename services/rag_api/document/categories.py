@@ -93,18 +93,15 @@ def load_kb_categories() -> dict[str, Any]:
     categories = [item.get("name", "") for item in items if item.get("name")]
     return {
         "items": items,
-        "categories": categories or DEFAULT_CATEGORIES,
+        "categories": categories,
         "generated_at": payload.get("generated_at", ""),
     }
 
 
 def default_categories_payload() -> dict[str, Any]:
     return {
-        "items": [
-            {"name": name, "document_count": 0, "chunk_count": 0, "source_files": [], "keyword_hits": []}
-            for name in DEFAULT_CATEGORIES
-        ],
-        "categories": DEFAULT_CATEGORIES,
+        "items": [],
+        "categories": [],
         "generated_at": "",
     }
 
@@ -112,7 +109,7 @@ def default_categories_payload() -> dict[str, Any]:
 def get_category_names() -> list[str]:
     payload = load_kb_categories()
     names = [name for name in payload.get("categories", []) if name]
-    return names or DEFAULT_CATEGORIES
+    return names
 
 
 def source_files_for_category(category: str) -> list[str]:

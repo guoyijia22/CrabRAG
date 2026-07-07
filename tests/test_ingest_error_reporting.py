@@ -23,7 +23,7 @@ def test_ingest_background_reports_specific_llm_service_error(monkeypatch):
     monkeypatch.setattr(
         ingest_tasks,
         "ingest_knowledge_base",
-        lambda progress_callback=None: (_ for _ in ()).throw(LLMServiceError("本地向量模型文件缺失：model.onnx")),
+        lambda progress_callback=None, full_rebuild=False: (_ for _ in ()).throw(LLMServiceError("本地向量模型文件缺失：model.onnx")),
     )
     monkeypatch.setattr(ingest_tasks, "_RUNNING_RUN_ID", "run_local_missing")
 

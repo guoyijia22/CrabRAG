@@ -185,6 +185,60 @@ def test_graph_payload_returns_empty_graph_when_no_dynamic_graph_or_sources(tmp_
     assert payload["stats"]["edge_count"] == 0
 
 
+def test_kb_categories_empty_when_no_category_file(tmp_path, monkeypatch):
+    from services.rag_api.document import categories
+
+    monkeypatch.setattr(categories, "KB_CATEGORIES_PATH", tmp_path / "missing-kb-categories.json")
+
+    payload = categories.load_kb_categories()
+
+    assert payload["items"] == []
+    assert payload["categories"] == []
+    assert categories.get_category_names() == []
+
+
+def test_kb_categories_empty_when_category_file_has_no_items(tmp_path, monkeypatch):
+    from services.rag_api.document import categories
+
+    categories_path = tmp_path / "kb_categories.json"
+    categories_path.write_text('{"items": [], "categories": ["客户准入"], "generated_at": "2026-01-01 00:00:00"}', encoding="utf-8")
+    monkeypatch.setattr(categories, "KB_CATEGORIES_PATH", categories_path)
+
+    payload = categories.load_kb_categories()
+
+    assert payload["items"] == []
+    assert payload["categories"] == []
+    assert categories.get_category_names() == []
+
+
+def test_kb_categories_returns_real_categories_when_present(tmp_path, monkeypatch):
+    from services.rag_api.document import categories
+
+    categories_path = tmp_path / "kb_categories.json"
+    categories_path.write_text(
+        '{"items": [{"name": "一渠一表", "document_count": 1, "chunk_count": 2, "source_files": ["a.docx"], "keyword_hits": []}], "categories": ["一渠一表"], "generated_at": "2026-01-01 00:00:00"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(categories, "KB_CATEGORIES_PATH", categories_path)
+
+    payload = categories.load_kb_categories()
+
+    assert payload["categories"] == ["一渠一表"]
+    assert categories.get_category_names() == ["一渠一表"]
+
+
+def test_heuristic_classify_does_not_emit_default_category_for_empty_kb(monkeypatch):
+    from services.rag_api.agent import heuristics
+
+    monkeypatch.setattr(heuristics, "get_category_names", lambda: [])
+
+    payload = heuristics.heuristic_classify("企业客户需要什么材料？", [], [])
+
+    assert payload["intent"] == ""
+    assert payload["question_type"] == "单一规则"
+    assert payload["retrieval_mode"] == "vector"
+
+
 def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypatch):
     from services.rag_api.config import Settings
     from services.rag_api.document import ingest
@@ -269,6 +323,45 @@ def test_frontend_default_app_settings_have_empty_knowledge_base_dirs():
 
     assert "knowledge_base_dirs:[]" in bundle
     assert "knowledge_base_dirs:[`docs`]" not in bundle
+
+
+def test_frontend_business_scope_defaults_are_general():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "scope_min_score:0" in bundle
+    assert "in_scope_keywords:[]" in bundle
+    assert "out_of_scope_keywords:[`股票`,`Stock`]" in bundle
+    assert "General knowledge base assistant for local documents." in bundle
+    assert "通用本地知识库助手" in bundle
+
+
+def test_frontend_knowledge_base_has_incremental_and_full_rebuild_controls():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "`新增知识库`,`Add knowledge base`" in bundle
+    assert "`知识库重建`,`Full rebuild knowledge base`" in bundle
+    assert "/api/ingest/full" in bundle
+    assert "confirm(" in bundle
+    assert "全量重建" in bundle
+    assert "crabrag:knowledge-base-rebuilt" in bundle
+
+
+def test_frontend_knowledge_base_empty_dirs_prompt_is_localized():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "请先在设置页面的“知识库读取目录（每行一个）”配置文件目录" in bundle
+    assert "Configure file directories in Settings > Knowledge base directories (one per line)" in bundle
+    assert "(e.docs_dirs??[]).length" in bundle
+    assert "D:\\\\cd\\\\docs" not in bundle
+
+
+def test_frontend_chat_category_list_starts_empty_and_refreshes_after_rebuild():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "children:f.map(e=>" in bundle
+    assert "children:(f.length>0?f:N_()).map" not in bundle
+    assert "addEventListener(`crabrag:knowledge-base-rebuilt`" in bundle
+    assert "removeEventListener(`crabrag:knowledge-base-rebuilt`" in bundle
 
 
 def test_frontend_graph_main_initial_layout_uses_radial_disk_layout():

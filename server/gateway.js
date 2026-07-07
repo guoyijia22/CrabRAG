@@ -1754,6 +1754,10 @@ ingestRoute.post("/ingest/run", async (c) => {
   const res = await fetch(`${RAG_BASE_URL}/api/ingest/run`, { method: "POST" });
   return c.json(await res.json(), res.status);
 });
+ingestRoute.post("/ingest/full", async (c) => {
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest/full`, { method: "POST" });
+  return c.json(await res.json(), res.status);
+});
 ingestRoute.get("/ingest/active", async (c) => {
   const res = await fetch(`${RAG_BASE_URL}/api/ingest/active`);
   return c.json(await res.json(), res.status);

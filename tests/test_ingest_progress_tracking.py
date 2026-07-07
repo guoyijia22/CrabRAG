@@ -21,7 +21,7 @@ def test_completed_ingest_records_duration(monkeypatch):
     monkeypatch.setattr(ingest_tasks.ingest_storage, "read_ingest_progress", fake_read)
     monkeypatch.setattr(ingest_tasks.ingest_storage, "save_ingest_progress", fake_save)
     monkeypatch.setattr(ingest_tasks.ingest_storage, "save_ingest_result", lambda payload: results.update(payload))
-    monkeypatch.setattr(ingest_tasks, "ingest_knowledge_base", lambda progress_callback=None: {"status": "success", "chunk_count": 3})
+    monkeypatch.setattr(ingest_tasks, "ingest_knowledge_base", lambda progress_callback=None, full_rebuild=False: {"status": "success", "chunk_count": 3})
     monkeypatch.setattr(ingest_tasks, "_now", lambda: "2026-06-25 10:03:05")
     monkeypatch.setattr(ingest_tasks, "_RUNNING_RUN_ID", "run_complete")
 
@@ -32,6 +32,36 @@ def test_completed_ingest_records_duration(monkeypatch):
     assert progress_records[-1]["finished_at"] == "2026-06-25 10:03:05"
     assert progress_records[-1]["duration_seconds"] == 185
     assert progress_records[-1]["duration_label"] == "3分5秒"
+
+
+def test_full_rebuild_flag_is_passed_to_background_ingest(monkeypatch):
+    calls = []
+    progress_records = []
+    results = {}
+
+    monkeypatch.setattr(
+        ingest_tasks.ingest_storage,
+        "read_ingest_progress",
+        lambda run_id: progress_records[-1].copy()
+        if progress_records
+        else {"run_id": run_id, "started_at": "2026-06-25 10:00:00", "total_units": ingest_tasks.TOTAL_UNITS},
+    )
+    monkeypatch.setattr(ingest_tasks.ingest_storage, "save_ingest_progress", lambda payload: progress_records.append(payload.copy()))
+    monkeypatch.setattr(ingest_tasks.ingest_storage, "save_ingest_result", lambda payload: results.update(payload))
+
+    def fake_ingest(progress_callback=None, full_rebuild=False):
+        calls.append(full_rebuild)
+        return {"status": "success", "chunk_count": 3, "incremental": not full_rebuild}
+
+    monkeypatch.setattr(ingest_tasks, "ingest_knowledge_base", fake_ingest)
+    monkeypatch.setattr(ingest_tasks, "_now", lambda: "2026-06-25 10:00:05")
+    monkeypatch.setattr(ingest_tasks, "_RUNNING_RUN_ID", "run_full")
+
+    ingest_tasks._run_background("run_full", full_rebuild=True)
+
+    assert calls == [True]
+    assert results["incremental"] is False
+    assert progress_records[-1]["status"] == "completed"
 
 
 def test_active_ingest_returns_running_and_last_success(tmp_path, monkeypatch):

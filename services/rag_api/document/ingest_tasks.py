@@ -13,7 +13,7 @@ _RUNNING_RUN_ID: str | None = None
 TOTAL_UNITS = 8
 
 
-def start_ingest_run() -> dict:
+def start_ingest_run(full_rebuild: bool = False) -> dict:
     global _RUNNING_RUN_ID
     worker: threading.Thread | None = None
     with _RUNNING_LOCK:
@@ -34,14 +34,15 @@ def start_ingest_run() -> dict:
             "completed_units": 0,
             "total_units": TOTAL_UNITS,
             "current_step": "等待执行",
-            "message": "知识库重建任务已创建，等待后台执行",
+            "message": "知识库全量重建任务已创建，等待后台执行" if full_rebuild else "知识库增量更新任务已创建，等待后台执行",
+            "full_rebuild": full_rebuild,
             "started_at": _now(),
             "updated_at": _now(),
             "error": None,
         }
         ingest_storage.save_ingest_progress(progress)
         _RUNNING_RUN_ID = run_id
-        worker = threading.Thread(target=_run_background, args=(run_id,), daemon=True)
+        worker = threading.Thread(target=_run_background, args=(run_id, full_rebuild), daemon=True)
     worker.start()
     return _with_progress_url(progress)
 
@@ -83,7 +84,7 @@ def read_ingest_result(run_id: str) -> dict | None:
     return ingest_storage.read_ingest_result(run_id)
 
 
-def _run_background(run_id: str) -> None:
+def _run_background(run_id: str, full_rebuild: bool = False) -> None:
     global _RUNNING_RUN_ID
 
     def record(update: dict) -> None:
@@ -98,8 +99,15 @@ def _run_background(run_id: str) -> None:
         ingest_storage.save_ingest_progress(payload)
 
     try:
-        record({"status": "running", "current_step": "开始重建", "message": "知识库重建任务开始执行"})
-        result = ingest_knowledge_base(progress_callback=record)
+        record(
+            {
+                "status": "running",
+                "current_step": "开始重建",
+                "message": "知识库全量重建任务开始执行" if full_rebuild else "知识库增量更新任务开始执行",
+                "full_rebuild": full_rebuild,
+            }
+        )
+        result = ingest_knowledge_base(progress_callback=record, full_rebuild=full_rebuild)
         result = {"run_id": run_id, **result}
         ingest_storage.save_ingest_result(result)
         record(

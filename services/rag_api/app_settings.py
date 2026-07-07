@@ -33,41 +33,14 @@ DEFAULT_UI_LANGUAGE: UiLanguage = "en"
 DEFAULT_NO_MATCH_RESPONSE = "暂无相关知识库依据，无法为您解答"
 DEFAULT_OUT_OF_SCOPE_RESPONSE = "当前问题不属于本系统配置的查询范围，无法为您解答。"
 
-DEFAULT_BUSINESS_SCOPE_DESCRIPTION = "面向本地知识库文档的通用基础查询、检索增强问答、知识图谱分析和可溯源回答。"
+DEFAULT_BUSINESS_SCOPE_DESCRIPTION = (
+    "General knowledge base assistant for local documents. "
+    "通用本地知识库助手，用于基于已配置文档进行检索、问答、知识图谱分析和可溯源回答。"
+)
 
-DEFAULT_IN_SCOPE_KEYWORDS = [
-    "查询",
-    "知识库",
-    "文档",
-    "规范",
-    "流程",
-    "规则",
-    "条款",
-    "制度",
-    "政策",
-    "材料",
-    "审核",
-    "办理",
-    "资费",
-    "故障",
-    "投诉",
-    "法律",
-    "公司法",
-    "通信行业",
-]
+DEFAULT_IN_SCOPE_KEYWORDS: list[str] = []
 
-DEFAULT_OUT_OF_SCOPE_KEYWORDS = [
-    "天气",
-    "股票",
-    "彩票",
-    "星座",
-    "菜谱",
-    "旅游攻略",
-    "电影推荐",
-    "游戏攻略",
-    "医疗诊断",
-    "个人理财",
-]
+DEFAULT_OUT_OF_SCOPE_KEYWORDS = ["股票", "Stock"]
 
 
 def default_knowledge_base_dirs() -> list[str]:
@@ -87,7 +60,7 @@ class AppSettings(BaseModel):
     business_scope_description: str = DEFAULT_BUSINESS_SCOPE_DESCRIPTION
     in_scope_keywords: list[str] = Field(default_factory=lambda: DEFAULT_IN_SCOPE_KEYWORDS.copy())
     out_of_scope_keywords: list[str] = Field(default_factory=lambda: DEFAULT_OUT_OF_SCOPE_KEYWORDS.copy())
-    scope_min_score: float = Field(default=0.25, ge=0.0, le=1.0)
+    scope_min_score: float = Field(default=0, ge=0.0, le=1.0)
     out_of_scope_response: str = DEFAULT_OUT_OF_SCOPE_RESPONSE
     no_match_response: str = DEFAULT_NO_MATCH_RESPONSE
 
