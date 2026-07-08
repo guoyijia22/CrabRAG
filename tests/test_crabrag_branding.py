@@ -161,5 +161,5 @@ def test_frontend_top_nav_shows_app_version():
     bundle_text = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
     css_text = Path("apps/web/dist/assets/index-C1LwUchF.css").read_text(encoding="utf-8")
 
-    assert "className:`app-version`,children:`Ver1.00`" in bundle_text
+    assert "className:`app-version`,children:`Ver1.01`" in bundle_text
     assert ".app-version{color:#a8a8a8" in css_text

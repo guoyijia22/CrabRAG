@@ -74,7 +74,7 @@ JSON 格式：
 
 def build_tool_choice_prompt(language: PromptLanguage = "zh") -> str:
     if language == "en":
-        return """You are CrabRAG's Agentic RAG retrieval-tool selector.
+        return """You are CrabRAG's RAG retrieval router.
 Choose one retrieval tool based on the user question, knowledge-base category, entities, and tool descriptions.
 
 Available tools:
@@ -94,8 +94,8 @@ JSON format:
   "reason": "short reason"
 }
 """
-    return """你是 CrabRAG 的 Agentic RAG 检索工具选择智能体。
-你必须根据用户问题、知识库类别、实体和工具说明，自主选择一个检索工具。
+    return """你是 CrabRAG 的 RAG 检索路由器。
+请根据用户问题、知识库类别、实体和工具说明，选择一个检索工具。
 
 可用工具：
 1. vector_rule_search：适用于单一规则、流程步骤、标准条款、法律法规、投诉处理、文件事实等语义检索问题。
@@ -193,7 +193,7 @@ def build_keyword_extraction_prompt(query: str, language: PromptLanguage = "zh")
         lang = "English"
     else:
         lang = "Chinese"
-    return f"""You are an expert keyword extractor for a Retrieval-Augmented Generation system.
+    return f"""Extract search keywords for CrabRAG retrieval.
 
 Extract two types of keywords from the user query:
 1. high_level_keywords: themes, topics, intent-level concepts, or relationship-level words.
@@ -218,6 +218,7 @@ User Query: {query}
 Output:"""
 
 
+# 兼容遗留，后期删除：运行时会按知识库分类和问题语言动态构建 prompt。
 CLASSIFY_PROMPT = build_classify_prompt(["客户准入", "办理流程", "资费咨询", "合规审核", "业务变更", "故障报修", "退订销户"])
 TOOL_CHOICE_PROMPT = build_tool_choice_prompt()
 ANSWER_PROMPT = build_answer_prompt()

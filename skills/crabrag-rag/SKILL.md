@@ -10,7 +10,7 @@ metadata:
 
 # CrabRAG 证据检索
 
-当用户问题可能需要本机 CrabRAG 知识库中的资料、制度、流程、业务规则或证据片段时，使用此 Skill。UniClaw 单文件入口为项目根目录的 `crabrag.skill`；本文件保留给 OpenClaw/Codex 等目录式 Skill 使用。
+当用户问题可能需要本机 CrabRAG 知识库中的资料、制度、流程、业务规则或证据片段时，使用此 Skill。UniClaw 单文件入口为项目根目录的 `crabrag.skill`；本文件保留给支持目录式 Skill 的本地调用端使用。
 
 ## 前置配置
 
