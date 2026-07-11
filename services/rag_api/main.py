@@ -24,6 +24,7 @@ from services.rag_api.logging_utils.qa_logger import append_qa_log, read_qa_logs
 from services.rag_api.memory.conversation_memory import get_history, update_memory
 from services.rag_api.model_api_settings import public_model_api_settings, update_model_api_settings
 from services.rag_api.model_api_settings import build_local_model_status
+from services.rag_api.secret_store import SecretStorageError, secret_storage_status
 from services.rag_api.rag_settings import RagSettings, load_rag_settings, save_rag_settings
 from services.rag_api.schemas import ChatRequest, ChatResponse, ConfigUpdateRequest, ModelApiSettingsRequest, ModelApiSettingsResponse, SettingsResponse
 from services.rag_api.vector.chroma_store import collection_status, validate_generation_collections
@@ -225,6 +226,7 @@ def health() -> dict:
             },
             "local": local_model_capabilities(),
         },
+        "secret_storage": secret_storage_status(),
     }
 
 
@@ -300,25 +302,32 @@ def app_config() -> dict:
 
 
 @app.put("/api/config")
-def update_app_config(request: ConfigUpdateRequest) -> dict:
+def update_app_config(request: ConfigUpdateRequest, http_request: Request) -> dict:
+    principal = _require_index_admin(http_request)
+    _append_security_audit("app_config.update_requested", principal=principal)
     write_system_name(request.system_name)
     return read_app_config()
 
 
 @app.get("/api/app-settings", response_model=AppSettings)
-def get_app_settings() -> AppSettings:
+def get_app_settings(http_request: Request) -> AppSettings:
+    _require_index_admin(http_request)
     return load_app_settings()
 
 
 @app.put("/api/app-settings", response_model=AppSettings)
-def update_app_settings(settings: AppSettings) -> AppSettings:
+def update_app_settings(settings: AppSettings, http_request: Request) -> AppSettings:
+    principal = _require_index_admin(http_request)
+    _append_security_audit("app_settings.update_requested", principal=principal)
     saved = save_app_settings(settings)
     get_settings.cache_clear()
     return saved
 
 
 @app.put("/api/app-settings/sidebar-image", response_model=AppSettings)
-def update_sidebar_image(upload: SidebarImageUpload) -> AppSettings:
+def update_sidebar_image(upload: SidebarImageUpload, http_request: Request) -> AppSettings:
+    principal = _require_index_admin(http_request)
+    _append_security_audit("sidebar_image.update_requested", principal=principal)
     try:
         return save_sidebar_image(upload)
     except ValueError as exc:
@@ -332,13 +341,22 @@ def get_sidebar_image() -> Response:
 
 
 @app.get("/api/model-settings", response_model=ModelApiSettingsResponse)
-def get_model_settings() -> ModelApiSettingsResponse:
-    return public_model_api_settings()
+def get_model_settings(http_request: Request) -> ModelApiSettingsResponse:
+    _require_index_admin(http_request)
+    try:
+        return public_model_api_settings()
+    except SecretStorageError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.put("/api/model-settings", response_model=ModelApiSettingsResponse)
-def update_model_settings(settings: ModelApiSettingsRequest) -> ModelApiSettingsResponse:
-    payload = update_model_api_settings(settings)
+def update_model_settings(settings: ModelApiSettingsRequest, http_request: Request) -> ModelApiSettingsResponse:
+    principal = _require_index_admin(http_request)
+    _append_security_audit("model_settings.update_requested", principal=principal)
+    try:
+        payload = update_model_api_settings(settings)
+    except SecretStorageError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     get_settings.cache_clear()
     RETRIEVAL_CACHE.clear()
     _clear_model_runtime_caches()
@@ -503,13 +521,17 @@ def logs(http_request: Request, intent: str | None = Query(default=None)) -> dic
 
 
 @app.get("/api/settings", response_model=SettingsResponse)
-def get_rag_settings() -> RagSettings:
+def get_rag_settings(http_request: Request) -> RagSettings:
+    _require_index_admin(http_request)
     return load_rag_settings()
 
 
 @app.put("/api/settings", response_model=SettingsResponse)
-def update_rag_settings(settings: RagSettings) -> RagSettings:
+def update_rag_settings(settings: RagSettings, http_request: Request) -> RagSettings:
     from services.rag_api.evaluation.approval import require_strategy_approval
+
+    principal = _require_index_admin(http_request)
+    _append_security_audit("rag_settings.update_requested", principal=principal)
 
     current = load_rag_settings()
     if not get_settings().use_local_models and settings.rerank_provider != "api":

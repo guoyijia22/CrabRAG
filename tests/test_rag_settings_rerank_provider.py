@@ -7,6 +7,15 @@ from services.rag_api.evaluation import approval
 from services.rag_api.main import app
 
 
+def _admin_headers(monkeypatch) -> dict[str, str]:
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN", "trusted")
+    return {
+        "x-crabrag-internal-token": "trusted",
+        "x-crabrag-subject": "admin",
+        "x-crabrag-admin": "true",
+    }
+
+
 def test_legacy_rag_settings_default_rerank_provider_api(tmp_path, monkeypatch):
     monkeypatch.setattr(rag_settings, "SETTINGS_PATH", tmp_path / "rag_settings.json")
     (tmp_path / "rag_settings.json").write_text(
@@ -24,15 +33,16 @@ def test_settings_api_forces_api_rerank_provider_when_remote_models(tmp_path, mo
     monkeypatch.setattr(main, "get_settings", lambda: config.Settings(use_local_models=False))
     monkeypatch.setattr(approval, "require_strategy_approval", lambda *args: None)
     client = TestClient(app)
+    headers = _admin_headers(monkeypatch)
 
-    current = client.get("/api/settings")
+    current = client.get("/api/settings", headers=headers)
     assert current.status_code == 200
     payload = current.json()
     assert payload["rerank_provider"] == "api"
 
     payload["rerank_enabled"] = True
     payload["rerank_provider"] = "local_onnx"
-    updated = client.put("/api/settings", json=payload)
+    updated = client.put("/api/settings", headers=headers, json=payload)
 
     assert updated.status_code == 200
     assert updated.json()["rerank_provider"] == "api"
@@ -44,12 +54,13 @@ def test_settings_api_preserves_rerank_model_when_local_models(tmp_path, monkeyp
     monkeypatch.setattr(main, "get_settings", lambda: config.Settings(use_local_models=True))
     monkeypatch.setattr(approval, "require_strategy_approval", lambda *args: None)
     client = TestClient(app)
+    headers = _admin_headers(monkeypatch)
 
-    payload = client.get("/api/settings").json()
+    payload = client.get("/api/settings", headers=headers).json()
     payload["rerank_enabled"] = True
     payload["rerank_provider"] = "local_onnx"
     payload["rerank_model"] = "BAAI/bge-reranker-v2-m3"
-    updated = client.put("/api/settings", json=payload)
+    updated = client.put("/api/settings", headers=headers, json=payload)
 
     assert updated.status_code == 200
     assert updated.json()["rerank_provider"] == "local_onnx"

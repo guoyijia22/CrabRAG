@@ -30,13 +30,13 @@ export interface LocalModelStatusItem {
 export interface ModelSettings {
   use_local_models: boolean;
   api_key_set: boolean;
-  api_key_source: "settings" | "env" | "missing";
+  api_key_source: "keyring" | "env" | "missing";
   api_key_hint: string;
   base_url: string;
   openai_compatible: boolean;
   chat_model: string;
   embedding_api_key_set: boolean;
-  embedding_api_key_source: "settings" | "env" | "missing";
+  embedding_api_key_source: "keyring" | "env" | "missing";
   embedding_api_key_hint: string;
   embedding_provider: "api" | "local_onnx";
   embedding_base_url: string;
@@ -44,7 +44,7 @@ export interface ModelSettings {
   embedding_model: string;
   embedding_onnx_model_file: OnnxModelFile;
   rerank_api_key_set: boolean;
-  rerank_api_key_source: "settings" | "env" | "missing";
+  rerank_api_key_source: "keyring" | "env" | "missing";
   rerank_api_key_hint: string;
   rerank_base_url: string;
   rerank_onnx_model_file: OnnxModelFile;

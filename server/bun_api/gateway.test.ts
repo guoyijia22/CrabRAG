@@ -116,7 +116,7 @@ describe("trusted RAG proxy", () => {
     expect(calls[4].headers.get("content-type")).toBe("application/json");
   });
 
-  test("forwards browser Authorization only on governed routes", async () => {
+  test("forwards browser Authorization only on protected routes", async () => {
     const calls: Headers[] = [];
     const app = createApp({
       config: trustedConfig,
@@ -137,9 +137,13 @@ describe("trusted RAG proxy", () => {
       headers: { "content-type": "application/json", authorization: "Bearer signed-jwt" },
       body: JSON.stringify({ retrieval_top_k: 5 }),
     });
+    await app.request("/api/app-assets/sidebar-image", {
+      headers: { authorization: "Bearer signed-jwt" },
+    });
 
     expect(calls[0].get("authorization")).toBe("Bearer signed-jwt");
-    expect(calls[1].get("authorization")).toBeNull();
+    expect(calls[1].get("authorization")).toBe("Bearer signed-jwt");
+    expect(calls[2].get("authorization")).toBeNull();
   });
 
   test("preserves backend status and returns JSON content type", async () => {
@@ -171,7 +175,7 @@ describe("trusted RAG proxy", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
   });
 
-  test("does not expand trusted identity headers to settings writes", async () => {
+  test("requires trusted identity headers on settings writes", async () => {
     let forwarded: Headers | undefined;
     const app = createApp({
       config: trustedConfig,
@@ -189,7 +193,10 @@ describe("trusted RAG proxy", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(Object.fromEntries(forwarded!.entries())).toEqual({ "content-type": "application/json" });
+    expect(forwarded!.get("content-type")).toBe("application/json");
+    expect(forwarded!.get("x-crabrag-internal-token")).toBe("server-token");
+    expect(forwarded!.get("x-crabrag-subject")).toBe("server-user");
+    expect(forwarded!.get("x-crabrag-admin")).toBe("true");
   });
 
   test("returns JSON 404 for unknown API routes", async () => {

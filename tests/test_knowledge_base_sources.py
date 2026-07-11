@@ -100,7 +100,10 @@ def test_app_settings_api_refreshes_cached_runtime_docs_dirs(tmp_path, monkeypat
     config.get_settings.cache_clear()
     assert config.get_settings().docs_dirs == [first.resolve()]
 
-    main.update_app_settings(app_settings.AppSettings(knowledge_base_dirs=[str(second)]))
+    monkeypatch.setattr(main, "_require_index_admin", lambda _request: type(
+        "Principal", (), {"subject": "admin", "permission_revision": "1"}
+    )())
+    main.update_app_settings(app_settings.AppSettings(knowledge_base_dirs=[str(second)]), object())
 
     assert config.get_settings().docs_dirs == [second.resolve()]
     config.get_settings.cache_clear()
@@ -116,9 +119,12 @@ def test_app_settings_api_does_not_clear_runtime_cache_when_save_fails(monkeypat
 
     monkeypatch.setattr(main, "save_app_settings", fail_save)
     monkeypatch.setattr(main.get_settings, "cache_clear", lambda: cleared.append(True))
+    monkeypatch.setattr(main, "_require_index_admin", lambda _request: type(
+        "Principal", (), {"subject": "admin", "permission_revision": "1"}
+    )())
 
     with pytest.raises(OSError, match="save failed"):
-        main.update_app_settings(app_settings.AppSettings())
+        main.update_app_settings(app_settings.AppSettings(), object())
 
     assert cleared == []
 

@@ -565,6 +565,67 @@ def test_graph_schema_endpoints_require_trusted_admin(monkeypatch):
         assert response.status_code == 200
 
 
+def test_settings_endpoints_require_trusted_admin(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from services.rag_api import main, model_api_settings
+
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN", "trusted")
+    monkeypatch.setattr(model_api_settings, "MODEL_API_SETTINGS_PATH", tmp_path / "model-settings.json")
+    client = TestClient(main.app)
+
+    requests = [
+        ("get", "/api/app-settings", None),
+        ("get", "/api/model-settings", None),
+        ("get", "/api/settings", None),
+        ("put", "/api/config", {"system_name": "Blocked"}),
+        ("put", "/api/app-settings", {}),
+        ("put", "/api/model-settings", {"use_local_models": False}),
+        ("put", "/api/settings", {}),
+    ]
+    for method, path, payload in requests:
+        response = (
+            getattr(client, method)(path, json=payload)
+            if payload is not None
+            else getattr(client, method)(path)
+        )
+        assert response.status_code == 403
+
+    admin_headers = {
+        "x-crabrag-internal-token": "trusted",
+        "x-crabrag-subject": "admin",
+        "x-crabrag-admin": "true",
+    }
+    for path in ("/api/app-settings", "/api/model-settings", "/api/settings"):
+        assert client.get(path, headers=admin_headers).status_code == 200
+
+
+def test_model_settings_returns_controlled_error_when_secure_storage_write_fails(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from services.rag_api import main
+    from services.rag_api.secret_store import SecretStorageError
+
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN", "trusted")
+    monkeypatch.setattr(
+        main,
+        "update_model_api_settings",
+        lambda settings: (_ for _ in ()).throw(SecretStorageError("secure store unavailable")),
+    )
+    response = TestClient(main.app).put(
+        "/api/model-settings",
+        headers={
+            "x-crabrag-internal-token": "trusted",
+            "x-crabrag-subject": "admin",
+            "x-crabrag-admin": "true",
+        },
+        json={"use_local_models": False},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "secure store unavailable"
+
+
 def test_governed_text_collection_read_never_creates_missing_collection(monkeypatch):
     from services.rag_api import exceptions
     from services.rag_api.vector import chroma_store

@@ -58,6 +58,7 @@ def test_doctor_clean_install_reports_warnings_without_exposing_secrets(tmp_path
     assert {item["name"] for item in report["checks"]} >= {
         "python", "platform", "configuration", "knowledge_base", "chroma", "generation",
         "service", "bun", "generated_assets", "remote_models", "local_models",
+        "secret_storage",
     }
 
 

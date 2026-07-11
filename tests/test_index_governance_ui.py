@@ -40,6 +40,9 @@ def test_gateway_forwards_trusted_identity_to_all_admin_routes():
     for expected in expected_calls:
         assert expected in routes
 
+    for path in ("/settings", "/app-settings", "/model-settings"):
+        assert f'api("{path}"), {{ headers: governed(c.req.raw) }}' in routes
+
 
 def test_gateway_bundle_has_maintainable_rebuildable_source_contract():
     package = (ROOT / "package.json").read_text(encoding="utf-8")

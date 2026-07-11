@@ -1712,7 +1712,7 @@ function createApiRoutes({ config, fetcher, projectRoot }) {
   app.get("/config", async (c) => c.json(await readAppConfig(projectRoot)));
   app.put("/config", async (c) => proxyJson(fetcher, api("/config"), {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: governed(c.req.raw, true),
     body: await body(c.req)
   }));
   app.post("/evaluations/run", async (c) => proxyJson(fetcher, api("/evaluations/run"), { method: "POST", headers: governed(c.req.raw) }));
@@ -1750,28 +1750,28 @@ function createApiRoutes({ config, fetcher, projectRoot }) {
   app.get("/ingest/:runId/progress", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed(c.req.raw) }));
   app.get("/ingest/:runId", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed(c.req.raw) }));
   app.get("/logs", async (c) => proxyJson(fetcher, `${api("/logs")}${new URL(c.req.url).search}`, { headers: governed(c.req.raw) }));
-  app.get("/settings", async () => proxyJson(fetcher, api("/settings")));
+  app.get("/settings", async (c) => proxyJson(fetcher, api("/settings"), { headers: governed(c.req.raw) }));
   app.put("/settings", async (c) => proxyJson(fetcher, api("/settings"), {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: governed(c.req.raw, true),
     body: await body(c.req)
   }));
-  app.get("/app-settings", async () => proxyJson(fetcher, api("/app-settings")));
+  app.get("/app-settings", async (c) => proxyJson(fetcher, api("/app-settings"), { headers: governed(c.req.raw) }));
   app.put("/app-settings", async (c) => proxyJson(fetcher, api("/app-settings"), {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: governed(c.req.raw, true),
     body: await body(c.req)
   }));
   app.put("/app-settings/sidebar-image", async (c) => proxyJson(fetcher, api("/app-settings/sidebar-image"), {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: governed(c.req.raw, true),
     body: await body(c.req)
   }));
   app.get("/app-assets/sidebar-image", async () => proxyBinary(fetcher, api("/app-assets/sidebar-image")));
-  app.get("/model-settings", async () => proxyJson(fetcher, api("/model-settings")));
+  app.get("/model-settings", async (c) => proxyJson(fetcher, api("/model-settings"), { headers: governed(c.req.raw) }));
   app.put("/model-settings", async (c) => proxyJson(fetcher, api("/model-settings"), {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: governed(c.req.raw, true),
     body: await body(c.req)
   }));
   return app;

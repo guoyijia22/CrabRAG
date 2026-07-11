@@ -9,11 +9,18 @@ from services.rag_api import model_api_settings as model_settings
 from services.rag_api.llm import siliconflow_client
 from services.rag_api.retrieval import optimizations
 from services.rag_api.rag_settings import RagSettings
+from services.rag_api.security import PrincipalContext
 
 
 def _isolate_model_settings(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(model_settings, "MODEL_API_SETTINGS_PATH", tmp_path / "model_api_settings.json")
     config.get_settings.cache_clear()
+
+
+def _allow_admin(main, monkeypatch):
+    principal = PrincipalContext("admin", (), (), "1", True)
+    monkeypatch.setattr(main, "_require_index_admin", lambda _request: principal)
+    return object()
 
 
 def test_model_api_settings_remote_mode_forces_api_embedding_provider(tmp_path, monkeypatch):
@@ -194,8 +201,9 @@ def test_model_settings_api_responses_include_local_model_status(tmp_path, monke
     _isolate_model_settings(tmp_path, monkeypatch)
     monkeypatch.setattr(model_settings, "PROJECT_ROOT", tmp_path)
 
-    get_payload = main.get_model_settings()
-    put_payload = main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=True))
+    request = _allow_admin(main, monkeypatch)
+    get_payload = main.get_model_settings(request)
+    put_payload = main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=True), request)
 
     assert get_payload.local_model_status.missing_count == 3
     assert put_payload.local_model_status.missing_count == 3
@@ -210,7 +218,8 @@ def test_model_settings_update_clears_retrieval_cache(tmp_path, monkeypatch):
     RETRIEVAL_CACHE.clear()
     RETRIEVAL_CACHE.set("stale", {"chunks": [{"document_id": "doc-a"}]}, {"doc-a"})
 
-    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False))
+    request = _allow_admin(main, monkeypatch)
+    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False), request)
 
     assert RETRIEVAL_CACHE.stats()["size"] == 0
 
@@ -226,9 +235,10 @@ def test_model_settings_update_failure_preserves_retrieval_cache(monkeypatch):
         raise OSError("save failed")
 
     monkeypatch.setattr(main, "update_model_api_settings", fail_update)
+    request = _allow_admin(main, monkeypatch)
 
     with pytest.raises(OSError, match="save failed"):
-        main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False))
+        main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False), request)
 
     assert RETRIEVAL_CACHE.stats()["size"] == 1
     RETRIEVAL_CACHE.clear()
@@ -247,8 +257,9 @@ def test_model_settings_cache_cleanup_continues_after_one_cleanup_fails(tmp_path
 
     monkeypatch.setattr(siliconflow_client.get_chat_client, "cache_clear", fail_chat_clear)
     monkeypatch.setattr(siliconflow_client.get_embedding_client, "cache_clear", lambda: calls.append("embedding"))
+    request = _allow_admin(main, monkeypatch)
 
-    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False))
+    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False), request)
 
     assert calls == ["chat", "embedding"]
 
@@ -350,8 +361,9 @@ def test_model_settings_update_clears_local_qwen_worker(monkeypatch):
     monkeypatch.setattr(siliconflow_client.get_chat_client, "cache_clear", lambda: None)
     monkeypatch.setattr(siliconflow_client.get_embedding_client, "cache_clear", lambda: None)
     monkeypatch.setattr(local_qwen_llm, "shutdown_local_qwen_worker", lambda: called.update(shutdown=called["shutdown"] + 1))
+    request = _allow_admin(main, monkeypatch)
 
-    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=True))
+    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=True), request)
 
     assert called["shutdown"] == 1
 
@@ -391,7 +403,7 @@ def test_legacy_rerank_settings_fall_back_to_embedding_client(tmp_path, monkeypa
     settings = config.get_settings()
 
     assert public.rerank_base_url == "http://127.0.0.1:9997/v1"
-    assert public.rerank_api_key_source == "settings"
+    assert public.rerank_api_key_source == "keyring"
     assert settings.rerank_base_url == "http://127.0.0.1:9997/v1"
     assert settings.rerank_api_key == "embedding-secret"
 
@@ -413,7 +425,7 @@ def test_model_api_settings_save_and_clear_rerank_client(tmp_path, monkeypatch):
     )
 
     assert public.rerank_base_url == "https://rerank.example/v1"
-    assert public.rerank_api_key_source == "settings"
+    assert public.rerank_api_key_source == "keyring"
     assert config.get_settings().rerank_api_key == "rerank-secret"
 
     cleared = model_settings.update_model_api_settings(
@@ -430,7 +442,7 @@ def test_model_api_settings_save_and_clear_rerank_client(tmp_path, monkeypatch):
     )
 
     assert cleared.rerank_base_url == "https://rerank.example/v1"
-    assert cleared.rerank_api_key_source == "settings"
+    assert cleared.rerank_api_key_source == "keyring"
     config.get_settings.cache_clear()
     assert config.get_settings().rerank_api_key == "embedding-secret"
 

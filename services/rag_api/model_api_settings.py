@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -9,12 +10,14 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
 from services.rag_api.paths import resolve_env_file, resolve_project_root
+from services.rag_api import secret_store
+from services.rag_api.secret_store import SecretStorageError
 
 PROJECT_ROOT = resolve_project_root(Path(__file__).resolve().parents[2])
 MODEL_API_SETTINGS_PATH = PROJECT_ROOT / "data" / "model_api_settings.json"
 ENV_PATH = resolve_env_file(PROJECT_ROOT, Path(r"D:\cd\.env"))
 
-ApiKeySource = Literal["settings", "env", "missing"]
+ApiKeySource = Literal["keyring", "env", "missing"]
 EmbeddingProvider = Literal["api", "local_onnx"]
 OnnxModelFile = Literal["model.onnx", "model_fp16.onnx", "model_int8.onnx", "model_q4.onnx"]
 
@@ -143,36 +146,40 @@ class ModelApiSettingsUpdate(BaseModel):
 def load_model_api_settings() -> ModelApiSettings:
     if MODEL_API_SETTINGS_PATH.exists():
         try:
-            return ModelApiSettings.model_validate_json(MODEL_API_SETTINGS_PATH.read_text(encoding="utf-8"))
+            loaded = ModelApiSettings.model_validate_json(MODEL_API_SETTINGS_PATH.read_text(encoding="utf-8"))
         except Exception:
             return ModelApiSettings()
+        changes = _secret_changes_from_settings(loaded)
+        if changes:
+            sanitized = _sanitized_settings(loaded)
+            _save_with_secret_changes(sanitized, changes)
+            return sanitized
+        return loaded
     return ModelApiSettings()
 
 
 def save_model_api_settings(settings: ModelApiSettings) -> ModelApiSettings:
     normalized = ModelApiSettings.model_validate(settings.model_dump())
-    MODEL_API_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MODEL_API_SETTINGS_PATH.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
-    return normalized
+    sanitized = _sanitized_settings(normalized)
+    _save_with_secret_changes(sanitized, _secret_changes_from_settings(normalized))
+    return sanitized
 
 
 def update_model_api_settings(update: ModelApiSettingsUpdate) -> PublicModelApiSettings:
     current = load_model_api_settings()
-    api_key = current.api_key
+    changes: dict[str, str | None] = {}
     if update.clear_api_key:
-        api_key = ""
+        changes["chat_api_key"] = None
     elif update.api_key:
-        api_key = update.api_key
-    embedding_api_key = current.embedding_api_key
+        changes["chat_api_key"] = update.api_key
     if update.clear_embedding_api_key:
-        embedding_api_key = ""
+        changes["embedding_api_key"] = None
     elif update.embedding_api_key:
-        embedding_api_key = update.embedding_api_key
-    rerank_api_key = current.rerank_api_key
+        changes["embedding_api_key"] = update.embedding_api_key
     if update.clear_rerank_api_key:
-        rerank_api_key = ""
+        changes["rerank_api_key"] = None
     elif update.rerank_api_key:
-        rerank_api_key = update.rerank_api_key
+        changes["rerank_api_key"] = update.rerank_api_key
     rerank_base_url = update.rerank_base_url if update.rerank_base_url is not None else current.rerank_base_url
     embedding_provider: EmbeddingProvider = "api"
     embedding_model = update.embedding_model
@@ -182,32 +189,31 @@ def update_model_api_settings(update: ModelApiSettingsUpdate) -> PublicModelApiS
         embedding_provider = "local_onnx"
         embedding_onnx_model_file = LOCAL_QWEN_EMBEDDING_ONNX_MODEL_FILE
         rerank_onnx_model_file = LOCAL_QWEN_RERANK_ONNX_MODEL_FILE
-    saved = save_model_api_settings(
-        ModelApiSettings(
-            use_local_models=update.use_local_models,
-            api_key=api_key,
-            base_url=update.base_url,
-            openai_compatible=True,
-            chat_model=update.chat_model,
-            embedding_provider=embedding_provider,
-            embedding_api_key=embedding_api_key,
-            embedding_base_url=update.embedding_base_url,
-            embedding_openai_compatible=update.embedding_openai_compatible,
-            embedding_model=embedding_model,
-            embedding_onnx_model_file=embedding_onnx_model_file,
-            rerank_api_key=rerank_api_key,
-            rerank_base_url=rerank_base_url,
-            rerank_onnx_model_file=rerank_onnx_model_file,
-        )
+    saved = ModelApiSettings(
+        use_local_models=update.use_local_models,
+        api_key="",
+        base_url=update.base_url,
+        openai_compatible=True,
+        chat_model=update.chat_model,
+        embedding_provider=embedding_provider,
+        embedding_api_key="",
+        embedding_base_url=update.embedding_base_url,
+        embedding_openai_compatible=update.embedding_openai_compatible,
+        embedding_model=embedding_model,
+        embedding_onnx_model_file=embedding_onnx_model_file,
+        rerank_api_key="",
+        rerank_base_url=rerank_base_url,
+        rerank_onnx_model_file=rerank_onnx_model_file,
     )
+    _save_with_secret_changes(saved, changes)
     return public_model_api_settings(saved)
 
 
 def public_model_api_settings(settings: ModelApiSettings | None = None) -> PublicModelApiSettings:
     active = settings or load_model_api_settings()
-    source, hint = _key_source_and_hint(active.api_key, None)
-    embedding_source, embedding_hint = _key_source_and_hint(active.embedding_api_key, _env_embedding_api_key())
-    rerank_api_key, rerank_source, rerank_hint = _effective_rerank_api_key_with_source(active)
+    _chat_api_key, source, hint = _effective_chat_api_key_with_source()
+    _embedding_api_key, embedding_source, embedding_hint = _effective_embedding_api_key_with_source()
+    rerank_api_key, rerank_source, rerank_hint = _effective_rerank_api_key_with_source()
     return PublicModelApiSettings(
         use_local_models=effective_use_local_models(active),
         api_key_set=source != "missing",
@@ -300,8 +306,8 @@ def _has_onnx_file(model_dir: Path, onnx_file: str) -> bool:
 
 
 def effective_api_key() -> str | None:
-    active = load_model_api_settings()
-    return active.api_key or None
+    load_model_api_settings()
+    return _effective_chat_api_key_with_source()[0]
 
 
 def effective_use_local_models(settings: ModelApiSettings | None = None) -> bool:
@@ -327,8 +333,8 @@ def effective_chat_model(settings: ModelApiSettings | None = None) -> str:
 
 
 def effective_embedding_api_key() -> str | None:
-    active = load_model_api_settings()
-    return active.embedding_api_key or _env_embedding_api_key()
+    load_model_api_settings()
+    return _effective_embedding_api_key_with_source()[0]
 
 
 def effective_embedding_provider(settings: ModelApiSettings | None = None) -> EmbeddingProvider:
@@ -366,7 +372,8 @@ def effective_embedding_onnx_model_file(settings: ModelApiSettings | None = None
 
 
 def effective_rerank_api_key() -> str | None:
-    return _effective_rerank_api_key_with_source(load_model_api_settings())[0]
+    load_model_api_settings()
+    return _effective_rerank_api_key_with_source()[0]
 
 
 def effective_rerank_base_url(settings: ModelApiSettings | None = None) -> str:
@@ -385,20 +392,20 @@ def effective_rerank_onnx_model_file(settings: ModelApiSettings | None = None) -
 
 def _env_api_key() -> str | None:
     load_dotenv(ENV_PATH)
-    for name in ["SILICONFLOW_API_KEY", "SILICON_FLOW_API_KEY", "OPENAI_API_KEY", "API_KEY"]:
+    for name in ["CRABRAG_API_KEY", "SILICONFLOW_API_KEY", "SILICON_FLOW_API_KEY", "OPENAI_API_KEY"]:
         value = os.getenv(name)
         if value:
             return value
     return None
 
 
-def _env_embedding_api_key() -> str | None:
+def _env_embedding_api_key(*, include_chat_fallback: bool = True) -> str | None:
     load_dotenv(ENV_PATH)
     for name in ["EMBEDDING_API_KEY", "RETRIEVAL_API_KEY", "SILICONFLOW_EMBEDDING_API_KEY"]:
         value = os.getenv(name)
         if value:
             return value
-    return _env_api_key()
+    return _env_api_key() if include_chat_fallback else None
 
 
 def _env_rerank_api_key() -> str | None:
@@ -437,26 +444,104 @@ def _env_embedding_model() -> str | None:
     return None
 
 
-def _key_source_and_hint(settings_key: str, env_key: str | None) -> tuple[ApiKeySource, str]:
-    if settings_key:
-        return "settings", _mask_api_key(settings_key)
+def _effective_chat_api_key_with_source() -> tuple[str | None, ApiKeySource, str]:
+    env_key = _env_api_key()
     if env_key:
-        return "env", "已通过环境变量配置"
-    return "missing", ""
+        return env_key, "env", "已通过环境变量配置"
+    stored = _stored_secret("chat_api_key")
+    if stored:
+        return stored, "keyring", _mask_api_key(stored)
+    return None, "missing", ""
 
 
-def _effective_rerank_api_key_with_source(settings: ModelApiSettings) -> tuple[str | None, ApiKeySource, str]:
-    if settings.rerank_api_key:
-        return settings.rerank_api_key, "settings", _mask_api_key(settings.rerank_api_key)
+def _effective_embedding_api_key_with_source() -> tuple[str | None, ApiKeySource, str]:
+    env_key = _env_embedding_api_key(include_chat_fallback=False)
+    if env_key:
+        return env_key, "env", "已通过环境变量配置"
+    stored = _stored_secret("embedding_api_key")
+    if stored:
+        return stored, "keyring", _mask_api_key(stored)
+    return None, "missing", ""
+
+
+def _effective_rerank_api_key_with_source() -> tuple[str | None, ApiKeySource, str]:
     env_rerank_api_key = _env_rerank_api_key()
     if env_rerank_api_key:
         return env_rerank_api_key, "env", "已通过环境变量配置"
-    if settings.embedding_api_key:
-        return settings.embedding_api_key, "settings", _mask_api_key(settings.embedding_api_key)
-    env_embedding_api_key = _env_embedding_api_key()
-    if env_embedding_api_key:
-        return env_embedding_api_key, "env", "已通过环境变量配置"
-    return None, "missing", ""
+    stored = _stored_secret("rerank_api_key")
+    if stored:
+        return stored, "keyring", _mask_api_key(stored)
+    return _effective_embedding_api_key_with_source()
+
+
+def _secret_changes_from_settings(settings: ModelApiSettings) -> dict[str, str | None]:
+    return {
+        name: value
+        for name, value in {
+            "chat_api_key": settings.api_key,
+            "embedding_api_key": settings.embedding_api_key,
+            "rerank_api_key": settings.rerank_api_key,
+        }.items()
+        if value
+    }
+
+
+def _stored_secret(name: str) -> str | None:
+    try:
+        return secret_store.get_secret_store().get(name)
+    except SecretStorageError:
+        return None
+
+
+def _sanitized_settings(settings: ModelApiSettings) -> ModelApiSettings:
+    return settings.model_copy(update={"api_key": "", "embedding_api_key": "", "rerank_api_key": ""})
+
+
+def _save_with_secret_changes(settings: ModelApiSettings, changes: dict[str, str | None]) -> None:
+    store = secret_store.get_secret_store()
+    previous: dict[str, str | None] = {}
+    applied: list[str] = []
+    try:
+        for name, value in changes.items():
+            previous[name] = store.get(name)
+            applied.append(name)
+            if value is None:
+                store.delete(name)
+                if store.get(name) is not None:
+                    raise SecretStorageError("安全存储密钥清除校验失败")
+            else:
+                store.set(name, value)
+                if store.get(name) != value:
+                    raise SecretStorageError("安全存储密钥写入校验失败")
+        _write_settings_json(settings)
+    except Exception:
+        rollback_error: Exception | None = None
+        for name in reversed(applied):
+            try:
+                value = previous[name]
+                if value is None:
+                    store.delete(name)
+                else:
+                    store.set(name, value)
+            except Exception as exc:  # noqa: BLE001
+                rollback_error = rollback_error or exc
+        if rollback_error:
+            raise SecretStorageError("安全存储回滚失败") from rollback_error
+        raise
+
+
+def _write_settings_json(settings: ModelApiSettings) -> None:
+    MODEL_API_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = MODEL_API_SETTINGS_PATH.with_name(f".{MODEL_API_SETTINGS_PATH.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(settings.model_dump(), handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, MODEL_API_SETTINGS_PATH)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _settings_file_has_key(key: str) -> bool:

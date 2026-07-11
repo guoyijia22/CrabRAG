@@ -304,16 +304,35 @@ def doctor(project_root: Path = PROJECT_ROOT) -> tuple[dict[str, object], int]:
             "generated assets are available" if generated_ok else "generated assets are incomplete",
         )
     )
+    env_names = ("CRABRAG_API_KEY", "OPENAI_API_KEY", "SILICONFLOW_API_KEY", "EMBEDDING_API_KEY", "RERANK_API_KEY")
+    env_configured = any(bool(os.getenv(key)) for key in env_names) or _env_file_has_any(root / "config" / ".env", env_names)
+    keyring_status, keyring_configured = _keyring_doctor()
     model_settings = _read_json(root / "data" / "model_api_settings.json")
-    remote_configured = any(
-        bool(model_settings.get(key)) for key in ("api_key", "embedding_api_key", "rerank_api_key")
-    ) or any(bool(os.getenv(key)) for key in ("CRABRAG_API_KEY", "OPENAI_API_KEY", "SILICONFLOW_API_KEY"))
+    legacy_plaintext = any(bool(model_settings.get(key)) for key in ("api_key", "embedding_api_key", "rerank_api_key"))
+    remote_configured = env_configured or keyring_configured
     checks.append(
         _check(
             "remote_models",
             "ok" if remote_configured else "warning",
             "remote model credentials are configured" if remote_configured else "remote model credentials are not configured",
             configured=remote_configured,
+        )
+    )
+    secure_status = "warning" if legacy_plaintext else "ok" if keyring_status.get("available") or env_configured else "warning"
+    checks.append(
+        _check(
+            "secret_storage",
+            secure_status,
+            "legacy plaintext model keys require migration"
+            if legacy_plaintext
+            else "secure model credential source is available"
+            if keyring_status.get("available") or env_configured
+            else "no environment credential and operating-system keyring is unavailable",
+            available=bool(keyring_status.get("available")),
+            backend=keyring_status.get("backend"),
+            error_type=keyring_status.get("error_type"),
+            environment_configured=env_configured,
+            legacy_plaintext_detected=legacy_plaintext,
         )
     )
     local_status, local_message, local_details = _local_model_doctor(root)
@@ -328,6 +347,33 @@ def doctor(project_root: Path = PROJECT_ROOT) -> tuple[dict[str, object], int]:
         "summary": summary,
         "checks": checks,
     }, exit_code
+
+
+def _env_file_has_any(path: Path, names: tuple[str, ...]) -> bool:
+    if not path.is_file():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key.strip() in names and bool(value.strip().strip('"\'')):
+            return True
+    return False
+
+
+def _keyring_doctor() -> tuple[dict[str, object], bool]:
+    try:
+        from services.rag_api.secret_store import get_secret_store, secret_storage_status
+
+        status = secret_storage_status()
+        configured = False
+        if status.get("available"):
+            store = get_secret_store()
+            configured = any(store.get(name) for name in ("chat_api_key", "embedding_api_key", "rerank_api_key"))
+        return status, configured
+    except Exception as exc:  # noqa: BLE001 - doctor must report capability failures
+        return {"available": False, "backend": None, "error_type": type(exc).__name__}, False
 
 
 def _version_for_root(root: Path) -> str:
