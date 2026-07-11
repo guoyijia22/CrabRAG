@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,7 @@ from services.rag_api.document.categories import save_kb_categories
 from services.rag_api.document import doc_status
 from services.rag_api.document.kb_naming import ensure_knowledge_base_name
 from services.rag_api.document.loader import load_document, scan_supported_files
+from services.rag_api.document.manifest import load_active_catalog
 from services.rag_api.document.multi_vector import expand_multi_vector_chunks
 from services.rag_api.document.splitter import split_documents
 from services.rag_api.graph.kb_graph_builder import build_and_save_kb_graph
@@ -42,10 +45,14 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     rag_settings = load_rag_settings()
     docs_dirs = [path.resolve() for path in getattr(settings, "docs_dirs", [settings.docs_dir])]
     progress(1, "扫描文档", "正在扫描并读取知识库目录")
-    files = scan_supported_files(docs_dirs)
+    scanned_files = scan_supported_files(docs_dirs)
+    build_cutoff = datetime.now(timezone.utc)
+    catalog = load_active_catalog(docs_dirs, scanned_files, cutoff=build_cutoff)
+    active_documents = {Path(item["path"]).resolve(): item for item in catalog["documents"]}
+    files = sorted(active_documents, key=lambda path: str(path).lower())
     manifest = doc_status.load_manifest()
     fingerprint = doc_status.pipeline_fingerprint(settings, rag_settings)
-    current_doc_ids = {doc_status.document_id_for_path(path) for path in files}
+    current_doc_ids = {str(item["document_id"]) for item in active_documents.values()}
     file_hashes = {path: doc_status.hash_file(path) for path in files}
     documents_by_id: dict[str, dict[str, Any]] = {}
     chunks_by_id: dict[str, list[dict[str, Any]]] = {}
@@ -72,17 +79,19 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
 
     chunk_size = rag_settings.chunk_size
     chunk_overlap = rag_settings.chunk_overlap
-    content_index = _unchanged_content_index(files, file_hashes, records, fingerprint)
+    content_index = _unchanged_content_index(files, file_hashes, records, fingerprint, active_documents)
     progress(2, "读取解析", f"已读取 {len(files)} 份文档，正在准备切片")
 
     for path in files:
-        doc_id = doc_status.document_id_for_path(path)
+        governance = active_documents[path]
+        doc_id = str(governance["document_id"])
+        manifest_revision = _manifest_revision(governance)
         previous = records.get(doc_id)
         file_hash = file_hashes[path]
-        if _can_reuse_duplicate(previous, file_hash, fingerprint):
+        if _can_reuse_duplicate(previous, file_hash, fingerprint, manifest_revision):
             duplicate_count += 1
             continue
-        if _can_reuse_snapshot(previous, file_hash, fingerprint):
+        if _can_reuse_snapshot(previous, file_hash, fingerprint, manifest_revision):
             snapshot = doc_status.load_snapshot(doc_id)
             if snapshot:
                 document, chunks = _snapshot_payload(snapshot)
@@ -107,6 +116,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                     duplicate_of=duplicate_of,
                     fingerprint=fingerprint,
                 )
+                records[doc_id].update(_governance_record(governance, manifest_revision))
                 doc_status.delete_snapshot(doc_id)
                 duplicate_count += 1
                 continue
@@ -114,8 +124,19 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
             document = {
                 **document,
                 "doc_id": doc_id,
+                "document_id": doc_id,
                 "content_hash": content_hash,
                 "file_hash": file_hash,
+                "version": str(governance["version"]),
+                "effective_at": str(governance["effective_at"]),
+                "updated_at": str(governance["updated_at"]),
+                "document_revision": doc_status.hash_content(f"{manifest_revision}:{content_hash}"),
+                "acl_visibility": governance["acl"]["visibility"],
+                "acl_users": json.dumps(governance["acl"]["users"], ensure_ascii=False),
+                "acl_roles": json.dumps(governance["acl"]["roles"], ensure_ascii=False),
+                "acl_groups": json.dumps(governance["acl"]["groups"], ensure_ascii=False),
+                "policy_ref": governance["acl"]["policy_ref"],
+                "acl_revision": governance["acl"]["revision"],
             }
             base_chunks = split_documents([document], chunk_size=chunk_size, chunk_overlap=chunk_overlap)
             chunks = expand_multi_vector_chunks(base_chunks, rag_settings)
@@ -127,6 +148,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 chunk_ids=[str(chunk["id"]) for chunk in chunks],
                 fingerprint=fingerprint,
             )
+            records[doc_id].update(_governance_record(governance, manifest_revision))
             doc_status.save_snapshot(doc_id, document, chunks)
             documents_by_id[doc_id] = document
             chunks_by_id[doc_id] = chunks
@@ -142,6 +164,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 previous=previous,
                 fingerprint=fingerprint,
             )
+            records[doc_id].update(_governance_record(governance, manifest_revision))
             doc_status.delete_snapshot(doc_id)
             failed_count += 1
 
@@ -193,6 +216,9 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     return {
         "status": "success",
         "incremental": not full_rebuild,
+        "build_cutoff": catalog["build_cutoff"],
+        "next_activation_at": catalog["next_activation_at"],
+        "governance_warnings": catalog["warnings"],
         "kb_dir": str(docs_dirs[0]),
         "kb_dirs": [str(path) for path in docs_dirs],
         "document_count": len(documents),
@@ -216,22 +242,24 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     }
 
 
-def _can_reuse_snapshot(previous: dict[str, Any] | None, file_hash: str, fingerprint: str) -> bool:
+def _can_reuse_snapshot(previous: dict[str, Any] | None, file_hash: str, fingerprint: str, manifest_revision: str) -> bool:
     return bool(
         previous
         and previous.get("status") == doc_status.PROCESSED
         and previous.get("file_hash") == file_hash
         and previous.get("pipeline_fingerprint") == fingerprint
+        and previous.get("manifest_revision") == manifest_revision
         and previous.get("chunk_ids")
     )
 
 
-def _can_reuse_duplicate(previous: dict[str, Any] | None, file_hash: str, fingerprint: str) -> bool:
+def _can_reuse_duplicate(previous: dict[str, Any] | None, file_hash: str, fingerprint: str, manifest_revision: str) -> bool:
     return bool(
         previous
         and previous.get("status") == doc_status.DUPLICATE
         and previous.get("file_hash") == file_hash
         and previous.get("pipeline_fingerprint") == fingerprint
+        and previous.get("manifest_revision") == manifest_revision
     )
 
 
@@ -250,20 +278,45 @@ def _unchanged_content_index(
     file_hashes: dict[Path, str],
     records: dict[str, Any],
     fingerprint: str,
+    active_documents: dict[Path, dict[str, Any]],
 ) -> dict[str, str]:
     index: dict[str, str] = {}
     for path in files:
-        doc_id = doc_status.document_id_for_path(path)
+        governance = active_documents[path]
+        doc_id = str(governance["document_id"])
         record = records.get(doc_id)
         if (
             record
             and record.get("status") == doc_status.PROCESSED
             and record.get("file_hash") == file_hashes[path]
             and record.get("pipeline_fingerprint") == fingerprint
+            and record.get("manifest_revision") == _manifest_revision(governance)
             and record.get("content_hash")
         ):
             index[str(record["content_hash"])] = doc_id
     return index
+
+
+def _manifest_revision(governance: dict[str, Any]) -> str:
+    payload = {
+        "document_id": governance.get("document_id"),
+        "version": governance.get("version"),
+        "status": governance.get("status"),
+        "effective_at": governance.get("effective_at"),
+        "updated_at": governance.get("updated_at"),
+        "acl": governance.get("acl"),
+    }
+    return doc_status.hash_content(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _governance_record(governance: dict[str, Any], manifest_revision: str) -> dict[str, Any]:
+    return {
+        "document_version": str(governance["version"]),
+        "effective_at": str(governance["effective_at"]),
+        "document_updated_at": str(governance["updated_at"]),
+        "acl": governance["acl"],
+        "manifest_revision": manifest_revision,
+    }
 
 
 if __name__ == "__main__":

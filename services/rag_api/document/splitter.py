@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 
 from services.rag_api.document.cleaner import infer_category
@@ -30,6 +31,7 @@ def _section_title(chunk: str) -> str:
 def split_documents(documents: list[dict], chunk_size: int = 600, chunk_overlap: int = 100) -> list[dict]:
     chunks: list[dict] = []
     for doc_index, doc in enumerate(documents, start=1):
+        document_chunk_start = len(chunks)
         source_file = doc["source_file"]
         source_path = doc["source_path"]
         doc_id = doc.get("doc_id")
@@ -58,6 +60,9 @@ def split_documents(documents: list[dict], chunk_size: int = 600, chunk_overlap:
         if buffer:
             chunk_index += 1
             chunks.append(_make_chunk(doc_index, chunk_index, buffer, source_file, source_path, category, doc_id, content_hash))
+        occurrences: dict[str, int] = {}
+        for chunk in chunks[document_chunk_start:]:
+            _apply_content_addressed_identity(chunk, doc, occurrences)
     return chunks
 
 
@@ -87,3 +92,34 @@ def _make_chunk(
         "content": content.strip(),
         "metadata": metadata,
     }
+
+
+def _apply_content_addressed_identity(chunk: dict, document: dict, occurrences: dict[str, int]) -> None:
+    normalized = re.sub(r"\s+", " ", str(chunk.get("content") or "")).strip()
+    chunk_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    occurrence = occurrences.get(chunk_hash, 0) + 1
+    occurrences[chunk_hash] = occurrence
+    document_id = str(document.get("document_id") or document.get("doc_id") or "")
+    if document_id:
+        chunk_id = f"{document_id}::chunk::{chunk_hash[:20]}::{occurrence:03d}"
+        chunk["id"] = chunk_id
+    else:
+        chunk_id = str(chunk["id"])
+    metadata = chunk["metadata"]
+    metadata.update(
+        {
+            "document_id": document_id,
+            "chunk_id": chunk_id,
+            "chunk_hash": chunk_hash,
+            "document_version": str(document.get("version") or "1"),
+            "effective_at": str(document.get("effective_at") or ""),
+            "updated_at": str(document.get("updated_at") or ""),
+            "policy_ref": str(document.get("policy_ref") or ""),
+            "acl_revision": str(document.get("acl_revision") or "1"),
+            "acl_visibility": str(document.get("acl_visibility") or "public"),
+            "acl_users": str(document.get("acl_users") or "[]"),
+            "acl_roles": str(document.get("acl_roles") or "[]"),
+            "acl_groups": str(document.get("acl_groups") or "[]"),
+            "document_revision": str(document.get("document_revision") or ""),
+        }
+    )

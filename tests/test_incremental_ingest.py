@@ -78,6 +78,68 @@ def test_incremental_ingest_skips_unchanged_documents(tmp_path, monkeypatch):
     assert graph_calls[-1][0] == first["graph_node_count"]
 
 
+def test_incremental_ingest_indexes_only_active_manifest_version(tmp_path, monkeypatch):
+    from services.rag_api.document import ingest
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "policy-v1.txt").write_text("旧版政策", encoding="utf-8")
+    (docs_dir / "policy-v2.txt").write_text("新版政策", encoding="utf-8")
+    (docs_dir / ".crabrag-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "knowledge_base_id": "kb-test",
+                "documents": [
+                    {
+                        "document_id": "policy",
+                        "path": "policy-v1.txt",
+                        "version": "1",
+                        "status": "published",
+                        "effective_at": "2025-01-01T00:00:00Z",
+                        "updated_at": "2025-01-01T00:00:00Z",
+                        "acl": {"visibility": "public", "revision": "1"},
+                    },
+                    {
+                        "document_id": "policy",
+                        "path": "policy-v2.txt",
+                        "version": "2",
+                        "status": "published",
+                        "effective_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                        "acl": {"visibility": "restricted", "roles": ["sales"], "revision": "2"},
+                    },
+                ],
+                "audit_warnings": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    upserts = []
+    monkeypatch.setattr(
+        ingest,
+        "upsert_chunks_incremental",
+        lambda chunks, delete_chunk_ids=None, progress_callback=None: upserts.extend(chunks) or len(chunks),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "index_graph_vectors_incremental",
+        lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
+    )
+
+    result = ingest.ingest_knowledge_base()
+
+    assert result["document_count"] == 1
+    assert result["processed_document_count"] == 1
+    assert {chunk["metadata"]["document_id"] for chunk in upserts} == {"policy"}
+    assert {chunk["metadata"]["document_version"] for chunk in upserts} == {"2"}
+    assert {chunk["metadata"]["acl_revision"] for chunk in upserts} == {"2"}
+
+
 def test_incremental_ingest_removes_deleted_documents_from_vectors_and_graph(tmp_path, monkeypatch):
     from services.rag_api.document import ingest
 
@@ -226,13 +288,19 @@ def test_full_rebuild_reprocesses_unchanged_documents(tmp_path, monkeypatch):
     assert upserts[1]["delete_chunk_ids"] == upserts[0]["ids"]
 
 
-def test_split_documents_uses_stable_doc_ids_for_incremental_chunks():
+def test_split_documents_uses_content_addressed_chunk_ids_and_metadata():
     from services.rag_api.document.splitter import split_documents
 
     chunks = split_documents(
         [
             {
                 "doc_id": "doc-abc",
+                "document_id": "doc-abc",
+                "version": "2",
+                "effective_at": "2026-07-01T00:00:00Z",
+                "updated_at": "2026-07-02T00:00:00Z",
+                "policy_ref": "policy-sales",
+                "acl_revision": "7",
                 "source_file": "a.txt",
                 "source_path": "/tmp/a.txt",
                 "content_hash": "hash-abc",
@@ -243,6 +311,14 @@ def test_split_documents_uses_stable_doc_ids_for_incremental_chunks():
         chunk_overlap=20,
     )
 
-    assert chunks[0]["id"] == "doc-abc::chunk::0001"
+    assert chunks[0]["id"].startswith("doc-abc::chunk::")
+    assert chunks[0]["id"].endswith("::001")
     assert chunks[0]["metadata"]["doc_id"] == "doc-abc"
+    assert chunks[0]["metadata"]["document_id"] == "doc-abc"
     assert chunks[0]["metadata"]["content_hash"] == "hash-abc"
+    assert chunks[0]["metadata"]["chunk_id"] == chunks[0]["id"]
+    assert len(chunks[0]["metadata"]["chunk_hash"]) == 64
+    assert chunks[0]["metadata"]["document_version"] == "2"
+    assert chunks[0]["metadata"]["effective_at"] == "2026-07-01T00:00:00Z"
+    assert chunks[0]["metadata"]["policy_ref"] == "policy-sales"
+    assert chunks[0]["metadata"]["acl_revision"] == "7"
