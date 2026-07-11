@@ -70,7 +70,7 @@ function EvaluationDetail({ detail, language }: { detail: EvaluationRun; languag
     ? `${text.fixedDataset}: ${String(dataset.dataset_id || "-")} · ${String(dataset.dataset_version || "-")}`
     : text.dynamicDataset;
   return <section className="evaluation-results">
-    <article className="dashboard-panel"><h2>{text.questionSet}</h2><p><strong>{datasetLabel}</strong></p><p><strong>{localizeRuntime(language, overall.best_profile_name || overall.best_profile_id || "-")}</strong></p><p>{localizeRuntime(language, overall.best_reason || "-")}</p><pre>{JSON.stringify(detail.question_generation || {}, null, 2)}</pre></article>
+    <article className="dashboard-panel"><h2>{text.questionSet}</h2><p><strong>{datasetLabel}</strong></p><p>{String(detail.generation_id || "legacy")} · {String(detail.configuration_fingerprint || "-")}</p><p><strong>{localizeRuntime(language, overall.best_profile_name || overall.best_profile_id || "-")}</strong></p><p>{localizeRuntime(language, overall.best_reason || "-")}</p><pre>{JSON.stringify(detail.question_generation || {}, null, 2)}</pre></article>
     <h2>{text.profileMetrics}</h2>{profiles.map((profile) => {
       const summary = object(profile.summary); const cases = array(profile.cases);
       return <article className="dashboard-panel" key={String(profile.id || profile.name)}><div className="section-heading"><div><h3>{localizeRuntime(language, profile.name || profile.id || "profile")}</h3><small>{strings(profile.enabled_switches).join(", ")}</small></div><span className="score-chip">{percent(summary.quality_score)}</span></div>

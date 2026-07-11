@@ -21,6 +21,7 @@ from services.rag_api.evaluation.profiles import build_evaluation_profiles, eval
 from services.rag_api.evaluation.quality import attach_quality_gates
 from services.rag_api.evaluation.questions import generate_evaluation_question_set
 from services.rag_api.evaluation.scoring import attach_baseline_deltas, build_overall_summary, score_case, score_profile
+from services.rag_api.evaluation.traceability import evaluation_configuration_fingerprint
 from services.rag_api.evaluation import storage
 from services.rag_api.llm.call_metrics import capture_model_calls
 from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, override_rag_settings, resolve_retrieval_top_k
@@ -132,11 +133,19 @@ def _run_evaluation(
         gate_eligible=bool(question_generation.get("gate_eligible", False)),
     )
     security_context = current_retrieval_context()
+    generation_id = security_context.generation_id if security_context else "legacy"
+    permission_fingerprint = security_context.permission_fingerprint if security_context else ""
     result = {
         "run_id": run_id,
-        "generation_id": security_context.generation_id if security_context else "legacy",
+        "generation_id": generation_id,
         "subject": security_context.principal.subject if security_context else "anonymous",
-        "permission_fingerprint": security_context.permission_fingerprint if security_context else "",
+        "permission_fingerprint": permission_fingerprint,
+        "configuration_fingerprint": evaluation_configuration_fingerprint(
+            generation_id=generation_id,
+            permission_fingerprint=permission_fingerprint,
+            question_generation=question_generation,
+            profiles=serialized_profiles,
+        ),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "profile_count": len(serialized_profiles),
         "question_count": len(questions),

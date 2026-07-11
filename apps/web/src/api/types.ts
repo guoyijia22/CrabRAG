@@ -222,6 +222,8 @@ export interface EvaluationRunSummary {
 }
 
 export interface EvaluationRun extends EvaluationRunSummary {
+  generation_id?: string;
+  configuration_fingerprint?: string;
   question_generation?: Record<string, unknown>;
   profiles?: Array<Record<string, unknown>>;
 }

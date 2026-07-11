@@ -5,7 +5,7 @@ import { App } from "../App";
 import { appSettings, mockApi } from "../test/fixtures";
 
 const detail = {
-  run_id: "eval-2", created_at: "2026-07-11 11:00:00", question_count: 1, profile_count: 1,
+  run_id: "eval-2", generation_id: "gen-1", configuration_fingerprint: "cfg123", created_at: "2026-07-11 11:00:00", question_count: 1, profile_count: 1,
   question_generation: { mode: "fixed", fixed: true, gate_eligible: true, dataset_id: "quality", dataset_version: "1.2.0", dataset_fingerprint: "abc123", question_count: 1 },
   summary: { best_profile_name: "全增强配置", best_reason: "来源命中更高" },
   profiles: [{ id: "enhanced", name: "全增强配置", enabled_switches: ["rerank_enabled"], summary: { success_rate: 1, source_hit_rate: 1, graph_path_coverage: 0.5, avg_latency_ms: 120, quality_score: 0.92, recommendation: "建议适用", recall_at_5: 0.8, mrr_at_10: 0.7, citation_precision: 0.9, citation_coverage: 1, no_evidence_answer_rate: 0, acl_leakage_rate: 0, invalid_content_leakage_rate: 0, p95_latency_ms: 150, model_call_count: 3, quality_gate: { eligible: true, passed: true, checks: {} } }, cases: [{ question_id: "q1", question: "如何回滚？", answer: "选择上一代", category: "制度", references: [{ source_file: "guide.md", content: "回滚步骤" }], relation_paths: [{ path: "索引 -> 回滚 -> 上一代" }], trace: [{ node: "retrieve", detail: "hit" }], metrics: { source_hit: true }, error: "模拟错误" }] }],
@@ -29,6 +29,7 @@ describe("evaluation", () => {
     expect(await screen.findByText("92.0%")).not.toBeNull();
     expect(screen.getByText("来源命中更高")).not.toBeNull();
     expect(screen.getByText(/quality · 1.2.0/)).not.toBeNull();
+    expect(screen.getByText(/gen-1 · cfg123/)).not.toBeNull();
     expect(screen.getByText("Recall@5")).not.toBeNull();
     expect(screen.getByText("质量门禁通过")).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "如何回滚？" }));
