@@ -234,11 +234,87 @@ def test_evaluation_collection_is_built_without_publishing_production_generation
         permission_fingerprint="permission-1",
     )
     added = []
-    monkeypatch.setattr(runner, "collection_status", lambda: {"count": 0})
+    registered = []
+    monkeypatch.setattr(runner, "collection_status", lambda: {"count": 0, "metadata": {}})
+    monkeypatch.setattr(runner, "_evaluation_fingerprint", lambda profile, generation_id: "eval-fp-1")
     monkeypatch.setattr(runner, "_evaluation_chunks", lambda settings: [{"id": "chunk-a"}])
-    monkeypatch.setattr(runner, "add_chunks", lambda chunks: added.extend(chunks) or len(chunks))
+    monkeypatch.setattr(
+        runner.index_generation,
+        "register_generation_resource",
+        lambda generation_id, kind, name: registered.append((generation_id, kind, name)),
+    )
+    monkeypatch.setattr(
+        runner,
+        "add_chunks",
+        lambda chunks, collection_metadata=None: added.append((chunks, collection_metadata)) or len(chunks),
+    )
 
     with use_retrieval_context(context):
         runner.ensure_evaluation_collection(profile)
 
-    assert added == [{"id": "chunk-a"}]
+    assert registered == [("gen-1", "evaluation", "crabrag_eval_multi_vector__gen-1")]
+    assert added == [
+        (
+            [{"id": "chunk-a"}],
+            {"evaluation_fingerprint": "eval-fp-1", "embedding_fingerprint": runner.doc_status.embedding_fingerprint(runner.get_settings())},
+        )
+    ]
+
+
+def test_evaluation_collection_rebuilds_when_fingerprint_changes_but_count_matches(monkeypatch):
+    from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
+
+    profile = {
+        "id": "multi",
+        "settings": RagSettings(multi_vector_enabled=True),
+        "collection_name": "crabrag_eval_multi_vector",
+    }
+    context = RetrievalContext(
+        generation_id="gen-1",
+        principal=PrincipalContext.anonymous(),
+        allowed_document_ids=frozenset(),
+        permission_fingerprint="permission-1",
+    )
+    rebuilt = []
+    monkeypatch.setattr(runner, "collection_status", lambda: {"count": 1, "metadata": {"evaluation_fingerprint": "old"}})
+    monkeypatch.setattr(runner, "_evaluation_fingerprint", lambda profile, generation_id: "new")
+    monkeypatch.setattr(runner, "_evaluation_chunks", lambda settings: [{"id": "chunk-a"}])
+    monkeypatch.setattr(runner.index_generation, "register_generation_resource", lambda *args: None)
+    monkeypatch.setattr(runner, "add_chunks", lambda chunks, collection_metadata=None: rebuilt.append(list(chunks)) or len(chunks))
+
+    with use_retrieval_context(context):
+        runner.ensure_evaluation_collection(profile)
+
+    assert rebuilt == [[{"id": "chunk-a"}]]
+
+
+def test_evaluation_collection_keeps_matching_fingerprint_and_clears_stale_empty_collection(monkeypatch):
+    from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
+
+    profile = {
+        "id": "multi",
+        "settings": RagSettings(multi_vector_enabled=True),
+        "collection_name": "crabrag_eval_multi_vector",
+    }
+    context = RetrievalContext(
+        generation_id="gen-1",
+        principal=PrincipalContext.anonymous(),
+        allowed_document_ids=frozenset(),
+        permission_fingerprint="permission-1",
+    )
+    rebuilt = []
+    status = {"count": 0, "metadata": {"evaluation_fingerprint": "same"}}
+    chunks = []
+    monkeypatch.setattr(runner, "collection_status", lambda: status)
+    monkeypatch.setattr(runner, "_evaluation_fingerprint", lambda profile, generation_id: "same")
+    monkeypatch.setattr(runner, "_evaluation_chunks", lambda settings: list(chunks))
+    monkeypatch.setattr(runner.index_generation, "register_generation_resource", lambda *args: None)
+    monkeypatch.setattr(runner, "add_chunks", lambda items, collection_metadata=None: rebuilt.append(list(items)) or len(items))
+
+    with use_retrieval_context(context):
+        runner.ensure_evaluation_collection(profile)
+        assert rebuilt == []
+        status["count"] = 1
+        runner.ensure_evaluation_collection(profile)
+
+    assert rebuilt == [[]]

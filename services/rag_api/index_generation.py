@@ -170,6 +170,25 @@ def record_generation_resources(generation_id: str, base_collection: str) -> dic
     return payload
 
 
+def register_generation_resource(generation_id: str, kind: str, name: str) -> dict[str, Any]:
+    if not generation_id or not kind or not name:
+        raise ValueError("索引代资源信息不完整")
+    with _STATE_LOCK:
+        path = generation_artifact_path(generation_id, "resources.json")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"索引代资源清单不可用：{generation_id}") from exc
+        collections = payload.get("collections") if isinstance(payload, dict) else None
+        if not isinstance(collections, list):
+            raise ValueError(f"索引代资源清单格式无效：{generation_id}")
+        resource = {"kind": kind, "name": name}
+        if not any(isinstance(item, dict) and item.get("name") == name for item in collections):
+            collections.append(resource)
+            _atomic_write_json(path, payload)
+        return payload
+
+
 def validate_generation_artifacts(generation_id: str, manifest: dict[str, Any] | None = None) -> None:
     payload = manifest or load_generation_manifest(generation_id)
     for name in payload.get("required_artifacts", []) or []:

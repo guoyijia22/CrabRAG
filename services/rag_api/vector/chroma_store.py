@@ -29,16 +29,22 @@ def get_collection():
     return client.get_or_create_collection(name=_collection_name(), metadata={"hnsw:space": "cosine"})
 
 
-def reset_collection():
+def reset_collection(collection_metadata: dict[str, Any] | None = None):
     client = _get_chroma_client()
     try:
         client.delete_collection(_collection_name())
     except Exception:
         pass
-    return client.get_or_create_collection(name=_collection_name(), metadata={"hnsw:space": "cosine"})
+    metadata = {"hnsw:space": "cosine", **(collection_metadata or {})}
+    return client.get_or_create_collection(name=_collection_name(), metadata=metadata)
 
 
-def add_chunks(chunks: list[dict], progress_callback: ProgressCallback | None = None) -> int:
+def add_chunks(
+    chunks: list[dict],
+    progress_callback: ProgressCallback | None = None,
+    collection_metadata: dict[str, Any] | None = None,
+) -> int:
+    collection = reset_collection(collection_metadata)
     if not chunks:
         return 0
     documents = [chunk["content"] for chunk in chunks]
@@ -46,7 +52,6 @@ def add_chunks(chunks: list[dict], progress_callback: ProgressCallback | None = 
     ids = [chunk["id"] for chunk in chunks]
     metadatas = [chunk["metadata"] for chunk in chunks]
     client = _get_chroma_client()
-    collection = reset_collection()
     for batch_ids, batch_embeddings, batch_metadatas, batch_documents in create_batches(
         client,
         ids=ids,
@@ -179,7 +184,12 @@ def _embed_in_batches(documents: list[str], progress_callback: ProgressCallback 
 
 def collection_status() -> dict[str, Any]:
     collection = get_collection()
-    return {"collection": _collection_name(), "count": collection.count(), "path": str(get_settings().chroma_dir)}
+    return {
+        "collection": _collection_name(),
+        "count": collection.count(),
+        "path": str(get_settings().chroma_dir),
+        "metadata": dict(collection.metadata or {}),
+    }
 
 
 def cleanup_obsolete_generations() -> dict[str, Any]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import uuid
 from datetime import datetime
@@ -147,11 +149,22 @@ def ensure_evaluation_collection(profile: dict) -> None:
     if not collection_name:
         return
     target_name = _evaluation_collection_name(profile)
+    generation_id = target_name.rsplit("__", 1)[-1]
+    evaluation_fingerprint = _evaluation_fingerprint(profile, generation_id)
+    embedding_fingerprint = doc_status.embedding_fingerprint(get_settings())
+    index_generation.register_generation_resource(generation_id, "evaluation", target_name)
     with override_rag_settings(profile["settings"]), override_collection_name(target_name):
         chunks = _evaluation_chunks(profile["settings"])
         status = collection_status()
-        if int(status.get("count", 0)) != len(chunks):
-            add_chunks(chunks)
+        metadata = status.get("metadata") or {}
+        if int(status.get("count", 0)) != len(chunks) or metadata.get("evaluation_fingerprint") != evaluation_fingerprint:
+            add_chunks(
+                chunks,
+                collection_metadata={
+                    "evaluation_fingerprint": evaluation_fingerprint,
+                    "embedding_fingerprint": embedding_fingerprint,
+                },
+            )
 
 
 def _run_case(run_id: str, profile: dict, question: dict) -> dict:
@@ -280,6 +293,15 @@ def _evaluation_collection_name(profile: dict) -> str | None:
     if not generation_id or generation_id == "legacy":
         raise RuntimeError("评测专用索引要求已发布的治理索引代")
     return f"{collection_name}__{generation_id}"
+
+
+def _evaluation_fingerprint(profile: dict, generation_id: str) -> str:
+    payload = {
+        "generation_id": generation_id,
+        "pipeline_fingerprint": doc_status.pipeline_fingerprint(get_settings(), profile["settings"]),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _evaluation_chunks(rag_settings) -> list[dict]:

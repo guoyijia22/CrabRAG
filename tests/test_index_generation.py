@@ -136,6 +136,27 @@ def test_build_generation_does_not_reuse_unknown_fingerprint_and_embeds_duplicat
     assert embedded_batches == [["same"]]
 
 
+def test_add_chunks_resets_empty_collection_and_preserves_build_metadata(monkeypatch):
+    from services.rag_api.vector import chroma_store
+
+    captured = []
+
+    class Collection:
+        def add(self, **kwargs):
+            raise AssertionError("empty collection must not add records")
+
+    monkeypatch.setattr(
+        chroma_store,
+        "reset_collection",
+        lambda collection_metadata=None: captured.append(collection_metadata) or Collection(),
+    )
+
+    count = chroma_store.add_chunks([], collection_metadata={"evaluation_fingerprint": "eval-v1"})
+
+    assert count == 0
+    assert captured == [{"evaluation_fingerprint": "eval-v1"}]
+
+
 def test_graph_generation_reuses_unchanged_entity_and_relationship_embeddings(tmp_path, monkeypatch):
     from services.rag_api.graph import graph_vector_store
 
@@ -238,6 +259,29 @@ def test_cleanup_keeps_generation_pinned_by_inflight_request(tmp_path, monkeypat
 
     assert result["deleted_generations"] == []
     assert (index_generation.GENERATIONS_DIR / "gen-0").exists()
+
+
+def test_register_generation_resource_is_atomic_and_deduplicated(tmp_path, monkeypatch):
+    index_generation = _configure_generation_paths(tmp_path, monkeypatch)
+    index_generation.record_generation_resources("gen-1", "kb")
+
+    index_generation.register_generation_resource(
+        "gen-1",
+        "evaluation",
+        "crabrag_eval_multi_vector__gen-1",
+    )
+    index_generation.register_generation_resource(
+        "gen-1",
+        "evaluation",
+        "crabrag_eval_multi_vector__gen-1",
+    )
+
+    resources = json.loads(
+        index_generation.generation_artifact_path("gen-1", "resources.json").read_text(encoding="utf-8")
+    )
+    assert resources["collections"].count(
+        {"kind": "evaluation", "name": "crabrag_eval_multi_vector__gen-1"}
+    ) == 1
 
 
 def test_generation_build_lock_rejects_second_process(tmp_path, monkeypatch):
