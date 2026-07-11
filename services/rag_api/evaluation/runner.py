@@ -215,6 +215,10 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
             "expect_relation_paths": question.get("expect_relation_paths", False),
             "expected_source_files": question.get("expected_source_files", []),
             "expected_document_ids": question.get("expected_document_ids", []),
+            "expected_chunk_ids": question.get("expected_chunk_ids", []),
+            "allowed_document_ids": question.get("allowed_document_ids", []),
+            "retired_document_ids": question.get("retired_document_ids", []),
+            "forbidden_document_ids": question.get("forbidden_document_ids", []),
             "source_category": question.get("source_category", ""),
         },
     }

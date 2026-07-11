@@ -256,3 +256,60 @@ def test_evaluation_case_captures_model_call_count(monkeypatch):
 
     assert case["model_call_count"] == 2
     assert case["model_calls"]["chat_calls"] == 2
+
+
+def test_quality_metrics_match_stable_chunk_ids_and_dataset_leakage_constraints():
+    cases = [
+        {
+            "answer": "answer",
+            "latency_ms": 10,
+            "expected": {
+                "expect_references": True,
+                "expected_chunk_ids": ["chunk-a", "chunk-b"],
+                "allowed_document_ids": ["doc-public"],
+                "retired_document_ids": ["doc-retired"],
+            },
+            "references": [
+                {"chunk_id": "chunk-a", "document_id": "doc-public", "source_file": "same.md"},
+                {"chunk_id": "chunk-x", "document_id": "doc-restricted", "source_file": "same.md"},
+                {"chunk_id": "chunk-b", "document_id": "doc-retired", "source_file": "same.md"},
+            ],
+        }
+    ]
+
+    metrics = calculate_quality_metrics(cases)
+
+    assert metrics["recall_at_5"] == 1.0
+    assert metrics["mrr_at_10"] == 1.0
+    assert metrics["citation_precision"] == 0.6667
+    assert metrics["acl_leakage_rate"] == 0.6667
+    assert metrics["invalid_content_leakage_rate"] == 0.3333
+
+
+def test_evaluation_case_preserves_dataset_identity_and_leakage_constraints(monkeypatch):
+    profile = {"id": "baseline", "settings": RagSettings(), "collection_name": None}
+    question = {
+        "id": "case-1",
+        "question": "测试问题",
+        "expected_chunk_ids": ["chunk-a"],
+        "allowed_document_ids": ["doc-a"],
+        "retired_document_ids": ["doc-old"],
+    }
+    monkeypatch.setattr(
+        runner,
+        "run_qa",
+        lambda state: {
+            **state,
+            "answer": "answer",
+            "references": [{"chunk_id": "chunk-a", "document_id": "doc-a"}],
+            "relation_paths": [],
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(runner, "get_settings", lambda: type("Settings", (), {"use_local_models": False})())
+
+    case = runner._run_case("eval-1", profile, question)
+
+    assert case["expected"]["expected_chunk_ids"] == ["chunk-a"]
+    assert case["expected"]["allowed_document_ids"] == ["doc-a"]
+    assert case["expected"]["retired_document_ids"] == ["doc-old"]

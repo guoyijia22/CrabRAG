@@ -33,7 +33,7 @@ def calculate_quality_metrics(cases: list[dict]) -> dict:
         relevance = [_reference_is_relevant(reference, relevant_ids) for reference in references]
 
         if relevant_ids:
-            top_five_ids = {_reference_id(reference) for reference in references[:5]}
+            top_five_ids = set().union(*(_reference_ids(reference) for reference in references[:5])) if references else set()
             recall_values.append(len(relevant_ids & top_five_ids) / len(relevant_ids))
             reciprocal_ranks.append(_reciprocal_rank(relevance[:10]))
         if expect_references:
@@ -45,8 +45,8 @@ def calculate_quality_metrics(cases: list[dict]) -> dict:
 
         citation_count += len(references)
         relevant_citations += sum(1 for item in relevance if item)
-        acl_leaks += sum(1 for reference in references if _is_acl_leak(reference))
-        invalid_content_leaks += sum(1 for reference in references if _is_invalid_content(reference))
+        acl_leaks += sum(1 for reference in references if _is_acl_leak(reference, expected))
+        invalid_content_leaks += sum(1 for reference in references if _is_invalid_content(reference, expected))
         latencies.append(max(0, int(case.get("latency_ms", 0) or 0)))
         model_call_count += max(0, int(case.get("model_call_count", 0) or 0))
 
@@ -105,27 +105,38 @@ def attach_quality_gates(profiles: list[dict], *, gate_eligible: bool) -> None:
 
 
 def _expected_reference_ids(expected: dict) -> set[str]:
-    values = expected.get("expected_document_ids") or expected.get("expected_source_files") or []
+    field, prefix = next(
+        (
+            (field_name, field_prefix)
+            for field_name, field_prefix in (
+                ("expected_chunk_ids", "chunk"),
+                ("expected_document_ids", "document"),
+                ("expected_source_files", "source"),
+            )
+            if expected.get(field_name)
+        ),
+        ("expected_source_files", "source"),
+    )
+    values = expected.get(field) or []
     if isinstance(values, str):
         values = [values]
-    return {str(value).strip() for value in values if str(value).strip()}
+    return {f"{prefix}:{str(value).strip()}" for value in values if str(value).strip()}
 
 
-def _reference_id(reference: dict) -> str:
+def _reference_ids(reference: dict) -> set[str]:
     metadata = reference.get("metadata") or {}
-    return str(
-        reference.get("document_id")
-        or metadata.get("document_id")
-        or reference.get("source_file")
-        or metadata.get("source_file")
-        or ""
-    ).strip()
+    values = {
+        "chunk": reference.get("chunk_id") or metadata.get("chunk_id"),
+        "document": reference.get("document_id") or metadata.get("document_id"),
+        "source": reference.get("source_file") or metadata.get("source_file"),
+    }
+    return {f"{kind}:{str(value).strip()}" for kind, value in values.items() if str(value or "").strip()}
 
 
 def _reference_is_relevant(reference: dict, relevant_ids: set[str]) -> bool:
     if isinstance(reference.get("relevant"), bool):
         return reference["relevant"]
-    return bool(relevant_ids and _reference_id(reference) in relevant_ids)
+    return bool(relevant_ids & _reference_ids(reference))
 
 
 def _reciprocal_rank(relevance: list[bool]) -> float:
@@ -135,17 +146,34 @@ def _reciprocal_rank(relevance: list[bool]) -> float:
     return 0.0
 
 
-def _is_acl_leak(reference: dict) -> bool:
+def _is_acl_leak(reference: dict, expected: dict) -> bool:
     metadata = reference.get("metadata") or {}
-    return any(reference.get(field, metadata.get(field)) is False for field in ("acl_allowed", "permission_allowed", "authorized"))
+    if any(reference.get(field, metadata.get(field)) is False for field in ("acl_allowed", "permission_allowed", "authorized")):
+        return True
+    if "allowed_document_ids" not in expected:
+        return False
+    document_id = str(reference.get("document_id") or metadata.get("document_id") or "")
+    return not document_id or document_id not in _string_values(expected.get("allowed_document_ids"))
 
 
-def _is_invalid_content(reference: dict) -> bool:
+def _is_invalid_content(reference: dict, expected: dict) -> bool:
     metadata = reference.get("metadata") or {}
     if any(reference.get(field, metadata.get(field)) is False for field in ("is_active", "is_valid")):
         return True
     status = str(reference.get("status") or metadata.get("status") or "").lower()
-    return status in _INACTIVE_STATUSES
+    if status in _INACTIVE_STATUSES:
+        return True
+    document_id = str(reference.get("document_id") or metadata.get("document_id") or "")
+    forbidden = _string_values(expected.get("retired_document_ids")) | _string_values(expected.get("forbidden_document_ids"))
+    return bool(document_id and document_id in forbidden)
+
+
+def _string_values(value) -> set[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return set()
+    return {str(item).strip() for item in value if str(item).strip()}
 
 
 def _primary_quality_improved(candidate: dict, baseline: dict) -> bool:
