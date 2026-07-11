@@ -101,6 +101,7 @@ describe("settings", () => {
     await user.click(await screen.findByRole("button", { name: "设置" }));
     expect(await screen.findByDisplayValue("D:/docs")).not.toBeNull();
     expect(screen.getByText("动态 Top-K")).not.toBeNull();
+    expect(screen.getByText("父片段上下文")).not.toBeNull();
     expect(screen.queryByLabelText("知识库名称")).toBeNull();
     expect(screen.queryByText("不得显示的知识库名")).toBeNull();
 
