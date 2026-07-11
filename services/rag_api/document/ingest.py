@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from services.rag_api.config import get_settings
+from services.rag_api import index_generation
 from services.rag_api.document.categories import save_kb_categories
 from services.rag_api.document import doc_status
 from services.rag_api.document.kb_naming import ensure_knowledge_base_name
@@ -16,9 +17,9 @@ from services.rag_api.document.multi_vector import expand_multi_vector_chunks
 from services.rag_api.document.splitter import split_documents
 from services.rag_api.graph.kb_graph_builder import build_and_save_kb_graph
 from services.rag_api.graph.schema_config import generate_graph_schema_suggestion
-from services.rag_api.graph.graph_vector_store import index_graph_vectors_incremental
+from services.rag_api.graph.graph_vector_store import index_graph_vectors_generation
 from services.rag_api.rag_settings import load_rag_settings
-from services.rag_api.vector.chroma_store import embedding_batch_count, upsert_chunks_incremental
+from services.rag_api.vector.chroma_store import build_generation_chunks, embedding_batch_count
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -47,17 +48,20 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     progress(1, "扫描文档", "正在扫描并读取知识库目录")
     scanned_files = scan_supported_files(docs_dirs)
     build_cutoff = datetime.now(timezone.utc)
+    generation_id = index_generation.new_generation_id(build_cutoff)
     catalog = load_active_catalog(docs_dirs, scanned_files, cutoff=build_cutoff)
     active_documents = {Path(item["path"]).resolve(): item for item in catalog["documents"]}
     files = sorted(active_documents, key=lambda path: str(path).lower())
-    manifest = doc_status.load_manifest()
+    source_manifest_path = index_generation.active_artifact_path("doc_status.json", doc_status.DOC_STATUS_PATH)
+    source_snapshot_dir = index_generation.active_artifact_path("snapshots", doc_status.DOC_SNAPSHOT_DIR)
+    staging_snapshot_dir = index_generation.generation_artifact_path(generation_id, "snapshots")
+    manifest = doc_status.load_manifest(source_manifest_path)
     fingerprint = doc_status.pipeline_fingerprint(settings, rag_settings)
+    embedding_fingerprint = doc_status.embedding_fingerprint(settings)
     current_doc_ids = {str(item["document_id"]) for item in active_documents.values()}
     file_hashes = {path: doc_status.hash_file(path) for path in files}
     documents_by_id: dict[str, dict[str, Any]] = {}
     chunks_by_id: dict[str, list[dict[str, Any]]] = {}
-    chunks_to_upsert: list[dict[str, Any]] = []
-    delete_chunk_ids: list[str] = []
     processed_count = 0
     skipped_count = 0
     removed_count = 0
@@ -66,15 +70,19 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     records = dict(manifest.get("documents", {}))
 
     if full_rebuild:
-        for doc_id, previous in records.items():
-            delete_chunk_ids.extend(str(chunk_id) for chunk_id in previous.get("chunk_ids", []) if chunk_id)
-            doc_status.delete_snapshot(doc_id)
         records = {}
 
+    tombstones: list[dict[str, Any]] = []
     for removed_doc_id in sorted(set(records) - current_doc_ids):
         previous = records.pop(removed_doc_id)
-        delete_chunk_ids.extend(str(chunk_id) for chunk_id in previous.get("chunk_ids", []) if chunk_id)
-        doc_status.delete_snapshot(removed_doc_id)
+        tombstones.append(
+            {
+                "document_id": removed_doc_id,
+                "document_version": previous.get("document_version", ""),
+                "deleted_at": catalog["build_cutoff"],
+                "reason": "source_removed_or_retired",
+            }
+        )
         removed_count += 1
 
     chunk_size = rag_settings.chunk_size
@@ -92,9 +100,10 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
             duplicate_count += 1
             continue
         if _can_reuse_snapshot(previous, file_hash, fingerprint, manifest_revision):
-            snapshot = doc_status.load_snapshot(doc_id)
+            snapshot = doc_status.load_snapshot(doc_id, source_snapshot_dir)
             if snapshot:
                 document, chunks = _snapshot_payload(snapshot)
+                doc_status.save_snapshot(doc_id, document, chunks, staging_snapshot_dir)
                 documents_by_id[doc_id] = document
                 chunks_by_id[doc_id] = chunks
                 if previous.get("content_hash"):
@@ -102,7 +111,6 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 skipped_count += 1
                 continue
 
-        delete_chunk_ids.extend(str(chunk_id) for chunk_id in (previous or {}).get("chunk_ids", []) if chunk_id)
         try:
             document = load_document(path)
             content_hash = doc_status.hash_content(document.get("content", ""))
@@ -117,7 +125,6 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                     fingerprint=fingerprint,
                 )
                 records[doc_id].update(_governance_record(governance, manifest_revision))
-                doc_status.delete_snapshot(doc_id)
                 duplicate_count += 1
                 continue
 
@@ -149,10 +156,9 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 fingerprint=fingerprint,
             )
             records[doc_id].update(_governance_record(governance, manifest_revision))
-            doc_status.save_snapshot(doc_id, document, chunks)
+            doc_status.save_snapshot(doc_id, document, chunks, staging_snapshot_dir)
             documents_by_id[doc_id] = document
             chunks_by_id[doc_id] = chunks
-            chunks_to_upsert.extend(chunks)
             content_index[content_hash] = doc_id
             processed_count += 1
         except Exception as exc:  # noqa: BLE001
@@ -165,19 +171,22 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 fingerprint=fingerprint,
             )
             records[doc_id].update(_governance_record(governance, manifest_revision))
-            doc_status.delete_snapshot(doc_id)
             failed_count += 1
+            raise
 
     documents = _ordered_values(documents_by_id)
     chunks = [chunk for doc_id in sorted(chunks_by_id) for chunk in chunks_by_id[doc_id]]
+    for chunk in chunks:
+        chunk.setdefault("metadata", {})["embedding_fingerprint"] = embedding_fingerprint
+        chunk["metadata"]["generation_id"] = generation_id
     progress(
         3,
         "清洗切片",
         f"已处理 {processed_count} 份文档，跳过 {skipped_count} 份，删除 {removed_count} 份，生成 {len(chunks)} 个基础片段",
     )
-    vector_batch_units = embedding_batch_count(len(chunks_to_upsert))
+    vector_batch_units = embedding_batch_count(len(chunks))
     total_units = 7 + vector_batch_units
-    progress(4, "多粒度处理", f"待入库片段数量 {len(chunks_to_upsert)}")
+    progress(4, "多粒度处理", f"待入库片段数量 {len(chunks)}")
     vector_base_units = 4
 
     def vector_progress(update: dict[str, Any]) -> None:
@@ -191,30 +200,71 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
             detail_total=update.get("detail_total"),
         )
 
-    reindexed_chunk_count = 0
-    if chunks_to_upsert or delete_chunk_ids:
-        reindexed_chunk_count = upsert_chunks_incremental(
-            chunks_to_upsert,
-            delete_chunk_ids=delete_chunk_ids,
-            progress_callback=vector_progress,
-        )
+    vector_stats = build_generation_chunks(
+        chunks,
+        generation_id,
+        full_rebuild=full_rebuild,
+        progress_callback=vector_progress,
+    )
+    reindexed_chunk_count = vector_stats["embedded_chunk_count"]
     chunk_count = len(chunks)
-    progress(4 + vector_batch_units, "写入向量库", f"已写入 {reindexed_chunk_count} 个 Chroma 向量片段")
-    category_payload = save_kb_categories(documents, chunks)
+    progress(
+        4 + vector_batch_units,
+        "写入向量库",
+        f"已写入 {chunk_count} 个 Chroma 向量片段，复用 {vector_stats['reused_embedding_count']} 个向量",
+    )
+    category_payload = save_kb_categories(
+        documents,
+        chunks,
+        path=index_generation.generation_artifact_path(generation_id, "categories.json"),
+    )
     progress(5 + vector_batch_units, "生成分类", f"已生成 {len(category_payload['items'])} 个知识库分类")
-    kb_graph = build_and_save_kb_graph(category_payload, documents, chunks)
-    graph_index_stats = index_graph_vectors_incremental(kb_graph.get("nodes", []), kb_graph.get("edges", []))
+    kb_graph = build_and_save_kb_graph(
+        category_payload,
+        documents,
+        chunks,
+        path=index_generation.generation_artifact_path(generation_id, "graph.json"),
+    )
+    graph_index_stats = index_graph_vectors_generation(kb_graph.get("nodes", []), kb_graph.get("edges", []), generation_id)
     progress(
         6 + vector_batch_units,
         "生成图谱索引",
         f"已写入 {graph_index_stats['graph_entity_index_count']} 个实体向量、{graph_index_stats['graph_relationship_index_count']} 个关系向量",
     )
     knowledge_base_name, knowledge_base_name_source = ensure_knowledge_base_name(category_payload, documents, chunk_count)
-    graph_schema_suggestion = generate_graph_schema_suggestion(category_payload, documents, chunks)
+    graph_schema_suggestion = generate_graph_schema_suggestion(
+        category_payload,
+        documents,
+        chunks,
+        path=index_generation.generation_artifact_path(generation_id, "graph_schema_suggestion.json"),
+    )
     progress(7 + vector_batch_units, "生成知识图谱", "知识库重建完成")
-    doc_status.save_manifest({"version": 1, "documents": records})
+    doc_status.save_manifest(
+        {"version": 2, "documents": records, "tombstones": tombstones},
+        index_generation.generation_artifact_path(generation_id, "doc_status.json"),
+    )
+    index_generation.publish_generation(
+        generation_id,
+        {
+            "permission_schema_version": 1,
+            "build_cutoff": catalog["build_cutoff"],
+            "next_activation_at": catalog["next_activation_at"],
+            "pipeline_fingerprint": fingerprint,
+            "embedding_fingerprint": embedding_fingerprint,
+            "documents": records,
+            "tombstones": tombstones,
+            "warnings": catalog["warnings"],
+            "stats": {
+                "document_count": len(documents),
+                "chunk_count": chunk_count,
+                **vector_stats,
+                **graph_index_stats,
+            },
+        },
+    )
     return {
         "status": "success",
+        "generation_id": generation_id,
         "incremental": not full_rebuild,
         "build_cutoff": catalog["build_cutoff"],
         "next_activation_at": catalog["next_activation_at"],
@@ -229,6 +279,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
         "duplicate_document_count": duplicate_count,
         "failed_document_count": failed_count,
         "reindexed_chunk_count": reindexed_chunk_count,
+        "reused_embedding_count": vector_stats["reused_embedding_count"],
         "collection": settings.collection_name,
         "multi_vector_enabled": rag_settings.multi_vector_enabled,
         "categories": category_payload["items"],

@@ -3,7 +3,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from collections.abc import Callable
+import hashlib
 from math import ceil
+import re
 from typing import Any
 
 import chromadb
@@ -13,6 +15,7 @@ from services.rag_api.config import get_settings
 from services.rag_api.document.categories import source_files_for_category
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.rag_settings import load_rag_settings
+from services.rag_api import index_generation
 
 EMBEDDING_BATCH_SIZE = 64
 _COLLECTION_OVERRIDE: ContextVar[str | None] = ContextVar("collection_name_override", default=None)
@@ -79,6 +82,61 @@ def upsert_chunks_incremental(
     return len(chunks)
 
 
+def build_generation_chunks(
+    chunks: list[dict],
+    generation_id: str,
+    *,
+    full_rebuild: bool = False,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, int]:
+    settings = get_settings()
+    client = _get_chroma_client()
+    target_name = index_generation.generation_collection_name(settings.collection_name, generation_id, "text")
+    try:
+        client.delete_collection(target_name)
+    except Exception:
+        pass
+    target = client.get_or_create_collection(name=target_name, metadata={"hnsw:space": "cosine"})
+    reusable = {} if full_rebuild else _load_reusable_embeddings(client, settings.collection_name)
+    embeddings: list[list[float] | None] = [None] * len(chunks)
+    missing_indexes: list[int] = []
+    for index, chunk in enumerate(chunks):
+        metadata = chunk.setdefault("metadata", {})
+        metadata["generation_id"] = generation_id
+        key = _embedding_reuse_key(chunk["content"], metadata)
+        embedding = reusable.get(key)
+        if embedding is None:
+            embedding = reusable.get((key[0], key[1], None))
+        if embedding is None:
+            missing_indexes.append(index)
+        else:
+            embeddings[index] = list(embedding)
+
+    if missing_indexes:
+        missing_documents = [chunks[index]["content"] for index in missing_indexes]
+        generated = _embed_in_batches(missing_documents, progress_callback=progress_callback)
+        for index, embedding in zip(missing_indexes, generated):
+            embeddings[index] = embedding
+
+    if chunks:
+        final_embeddings = [list(embedding or []) for embedding in embeddings]
+        for batch_ids, batch_embeddings, batch_metadatas, batch_documents in create_batches(
+            client,
+            ids=[chunk["id"] for chunk in chunks],
+            embeddings=final_embeddings,
+            metadatas=[chunk["metadata"] for chunk in chunks],
+            documents=[chunk["content"] for chunk in chunks],
+        ):
+            target.upsert(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
+    if target.count() != len(chunks):
+        raise RuntimeError(f"索引代写入数量不一致：expected={len(chunks)}, actual={target.count()}")
+    return {
+        "chunk_count": len(chunks),
+        "reused_embedding_count": len(chunks) - len(missing_indexes),
+        "embedded_chunk_count": len(missing_indexes),
+    }
+
+
 def _get_chroma_client():
     settings = get_settings()
     settings.chroma_dir.mkdir(parents=True, exist_ok=True)
@@ -132,7 +190,43 @@ def override_collection_name(collection_name: str | None):
 
 
 def _collection_name() -> str:
-    return _COLLECTION_OVERRIDE.get() or get_settings().collection_name
+    override = _COLLECTION_OVERRIDE.get()
+    if override:
+        return override
+    base = get_settings().collection_name
+    generation_id = index_generation.active_generation_id()
+    return index_generation.generation_collection_name(base, generation_id, "text") if generation_id else base
+
+
+def _load_reusable_embeddings(client, base_collection_name: str) -> dict[tuple[str, str, str | None], list[float]]:
+    active_generation = index_generation.active_generation_id()
+    source_name = (
+        index_generation.generation_collection_name(base_collection_name, active_generation, "text")
+        if active_generation
+        else base_collection_name
+    )
+    try:
+        source = client.get_or_create_collection(name=source_name, metadata={"hnsw:space": "cosine"})
+        result = source.get(include=["documents", "metadatas", "embeddings"])
+    except Exception:
+        return {}
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    raw_embeddings = result.get("embeddings")
+    embeddings = list(raw_embeddings) if raw_embeddings is not None else []
+    reusable: dict[tuple[str, str, str | None], list[float]] = {}
+    for document, metadata, embedding in zip(documents, metadatas, embeddings):
+        key = _embedding_reuse_key(str(document or ""), metadata or {})
+        reusable.setdefault(key, [float(value) for value in embedding])
+    return reusable
+
+
+def _embedding_reuse_key(document: str, metadata: dict[str, Any]) -> tuple[str, str, str | None]:
+    normalized = re.sub(r"\s+", " ", document).strip()
+    chunk_hash = str(metadata.get("chunk_hash") or hashlib.sha256(normalized.encode("utf-8")).hexdigest())
+    granularity = str(metadata.get("granularity") or "chunk")
+    fingerprint = str(metadata["embedding_fingerprint"]) if metadata.get("embedding_fingerprint") else None
+    return chunk_hash, granularity, fingerprint
 
 
 def search_chunks(query: str, intent: str, entities: list[str] | None = None, top_k: int = 2, min_score: float | None = None, candidate_k: int | None = None) -> list[dict]:

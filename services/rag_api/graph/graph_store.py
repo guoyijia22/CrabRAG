@@ -12,7 +12,12 @@ KB_GRAPH_PATH = PROJECT_DIR / "data" / "kb_graph.json"
 
 
 def load_raw_graph(path: Path | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    graph_path = path or KB_GRAPH_PATH
+    if path is None:
+        from services.rag_api.index_generation import active_artifact_path
+
+        graph_path = active_artifact_path("graph.json", KB_GRAPH_PATH)
+    else:
+        graph_path = path
     if graph_path.exists():
         try:
             data = json.loads(graph_path.read_text(encoding="utf-8"))

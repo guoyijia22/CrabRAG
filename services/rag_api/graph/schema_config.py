@@ -87,22 +87,26 @@ def load_graph_schema() -> dict[str, Any]:
 
 
 def load_graph_schema_suggestion() -> dict[str, Any]:
-    if not GRAPH_SCHEMA_SUGGESTION_PATH.exists():
+    from services.rag_api.index_generation import active_artifact_path
+
+    suggestion_path = active_artifact_path("graph_schema_suggestion.json", GRAPH_SCHEMA_SUGGESTION_PATH)
+    if not suggestion_path.exists():
         fallback = default_graph_schema()
         fallback["status"] = "missing"
         fallback["source"] = "default"
         return fallback
     try:
-        payload = json.loads(GRAPH_SCHEMA_SUGGESTION_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(suggestion_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default_graph_schema()
     return _validate_schema(payload, status="suggested", source=payload.get("source", "suggestion"))
 
 
-def save_graph_schema_suggestion(payload: dict[str, Any]) -> dict[str, Any]:
+def save_graph_schema_suggestion(payload: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
     schema = _validate_schema(payload, status="suggested", source=payload.get("source", "llm"))
-    GRAPH_SCHEMA_SUGGESTION_PATH.parent.mkdir(parents=True, exist_ok=True)
-    GRAPH_SCHEMA_SUGGESTION_PATH.write_text(json.dumps(schema, ensure_ascii=False, indent=2), encoding="utf-8")
+    suggestion_path = path or GRAPH_SCHEMA_SUGGESTION_PATH
+    suggestion_path.parent.mkdir(parents=True, exist_ok=True)
+    suggestion_path.write_text(json.dumps(schema, ensure_ascii=False, indent=2), encoding="utf-8")
     return schema
 
 
@@ -113,7 +117,12 @@ def save_graph_schema_config(payload: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def generate_graph_schema_suggestion(category_payload: dict[str, Any], documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, Any]:
+def generate_graph_schema_suggestion(
+    category_payload: dict[str, Any],
+    documents: list[dict[str, Any]],
+    chunks: list[dict[str, Any]],
+    path: Path | None = None,
+) -> dict[str, Any]:
     try:
         content = chat_completion(
             [
@@ -125,11 +134,11 @@ def generate_graph_schema_suggestion(category_payload: dict[str, Any], documents
         )
         parsed = _extract_json(content)
         parsed["source"] = "llm"
-        return save_graph_schema_suggestion(parsed)
+        return save_graph_schema_suggestion(parsed, path=path)
     except Exception:
         fallback = _fallback_suggestion(category_payload)
         fallback["source"] = "fallback"
-        return save_graph_schema_suggestion(fallback)
+        return save_graph_schema_suggestion(fallback, path=path)
 
 
 def _schema_system_prompt() -> str:

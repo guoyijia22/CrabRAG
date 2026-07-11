@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from services.rag_api.config import Settings
 from services.rag_api.rag_settings import RagSettings
 
 
 def _configure_incremental_paths(tmp_path: Path, monkeypatch):
+    from services.rag_api import index_generation
     from services.rag_api.document import categories, doc_status, ingest
     from services.rag_api.graph import graph_store, kb_graph_builder
 
@@ -20,8 +23,12 @@ def _configure_incremental_paths(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(kb_graph_builder, "KB_GRAPH_PATH", graph_path)
     monkeypatch.setattr(graph_store, "KB_GRAPH_PATH", graph_path)
     monkeypatch.setattr(categories, "KB_CATEGORIES_PATH", categories_path)
+    index_root = tmp_path / "data" / "index"
+    monkeypatch.setattr(index_generation, "INDEX_ROOT", index_root)
+    monkeypatch.setattr(index_generation, "ACTIVE_INDEX_PATH", index_root / "active.json")
+    monkeypatch.setattr(index_generation, "GENERATIONS_DIR", index_root / "generations")
     monkeypatch.setattr(ingest, "ensure_knowledge_base_name", lambda category_payload, documents, chunk_count: ("测试知识库", "test"))
-    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", lambda category_payload, documents, chunks: {})
+    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", lambda category_payload, documents, chunks, path=None: {})
     return status_path, snapshot_dir, graph_path
 
 
@@ -45,22 +52,7 @@ def test_incremental_ingest_skips_unchanged_documents(tmp_path, monkeypatch):
     _configure_incremental_paths(tmp_path, monkeypatch)
     monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
     monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
-    graph_calls = []
-    upserts = []
-    monkeypatch.setattr(
-        ingest,
-        "upsert_chunks_incremental",
-        lambda chunks, delete_chunk_ids=None, progress_callback=None: upserts.append(
-            {"ids": [chunk["id"] for chunk in chunks], "delete_chunk_ids": list(delete_chunk_ids or [])}
-        )
-        or len(chunks),
-    )
-    monkeypatch.setattr(
-        ingest,
-        "index_graph_vectors_incremental",
-        lambda nodes, edges: graph_calls.append((len(nodes), len(edges)))
-        or {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
-    )
+    builds = _capture_generation_builds(ingest, monkeypatch)
 
     first = ingest.ingest_knowledge_base()
     second = ingest.ingest_knowledge_base()
@@ -68,14 +60,13 @@ def test_incremental_ingest_skips_unchanged_documents(tmp_path, monkeypatch):
     assert first["incremental"] is True
     assert first["processed_document_count"] == 1
     assert first["skipped_document_count"] == 0
-    assert first["reindexed_chunk_count"] == len(upserts[0]["ids"])
-    assert upserts[0]["ids"]
-    assert upserts[0]["delete_chunk_ids"] == []
+    assert first["reindexed_chunk_count"] == len(builds[0]["ids"])
+    assert builds[0]["ids"]
     assert second["processed_document_count"] == 0
     assert second["skipped_document_count"] == 1
     assert second["reindexed_chunk_count"] == 0
-    assert len(upserts) == 1
-    assert graph_calls[-1][0] == first["graph_node_count"]
+    assert len(builds) == 2
+    assert builds[1]["embedded"] == 0
 
 
 def test_incremental_ingest_indexes_only_active_manifest_version(tmp_path, monkeypatch):
@@ -116,28 +107,126 @@ def test_incremental_ingest_indexes_only_active_manifest_version(tmp_path, monke
         ),
         encoding="utf-8",
     )
+
+
+def _capture_generation_builds(ingest, monkeypatch):
+    builds = []
+    known_embeddings = set()
+
+    def build(chunks, generation_id, full_rebuild=False, progress_callback=None):
+        keys = [
+            (
+                chunk.get("metadata", {}).get("chunk_hash"),
+                chunk.get("metadata", {}).get("granularity", "chunk"),
+                chunk.get("metadata", {}).get("embedding_fingerprint"),
+            )
+            for chunk in chunks
+        ]
+        embedded = len(keys) if full_rebuild else sum(key not in known_embeddings for key in keys)
+        known_embeddings.update(keys)
+        builds.append(
+            {
+                "generation_id": generation_id,
+                "ids": [chunk["id"] for chunk in chunks],
+                "chunks": chunks,
+                "full_rebuild": full_rebuild,
+                "embedded": embedded,
+            }
+        )
+        return {
+            "chunk_count": len(chunks),
+            "reused_embedding_count": len(chunks) - embedded,
+            "embedded_chunk_count": embedded,
+        }
+
+    monkeypatch.setattr(ingest, "build_generation_chunks", build)
+    monkeypatch.setattr(
+        ingest,
+        "index_graph_vectors_generation",
+        lambda nodes, edges, generation_id: {
+            "graph_entity_index_count": len(nodes),
+            "graph_relationship_index_count": len(edges),
+            "graph_reused_embedding_count": 0,
+            "graph_embedded_record_count": len(nodes) + len(edges),
+        },
+    )
+    return builds
     _configure_incremental_paths(tmp_path, monkeypatch)
     monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
     monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
-    upserts = []
-    monkeypatch.setattr(
-        ingest,
-        "upsert_chunks_incremental",
-        lambda chunks, delete_chunk_ids=None, progress_callback=None: upserts.extend(chunks) or len(chunks),
-    )
-    monkeypatch.setattr(
-        ingest,
-        "index_graph_vectors_incremental",
-        lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
-    )
+    builds = _capture_generation_builds(ingest, monkeypatch)
 
     result = ingest.ingest_knowledge_base()
 
     assert result["document_count"] == 1
     assert result["processed_document_count"] == 1
-    assert {chunk["metadata"]["document_id"] for chunk in upserts} == {"policy"}
-    assert {chunk["metadata"]["document_version"] for chunk in upserts} == {"2"}
-    assert {chunk["metadata"]["acl_revision"] for chunk in upserts} == {"2"}
+    assert {chunk["metadata"]["document_id"] for chunk in builds[0]["chunks"]} == {"policy"}
+    assert {chunk["metadata"]["document_version"] for chunk in builds[0]["chunks"]} == {"2"}
+    assert {chunk["metadata"]["acl_revision"] for chunk in builds[0]["chunks"]} == {"2"}
+
+
+def test_ingest_publishes_generation_only_after_all_indexes_succeed(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.document import ingest
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.txt").write_text("生产知识", encoding="utf-8")
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    monkeypatch.setattr(
+        ingest,
+        "build_generation_chunks",
+        lambda chunks, generation_id, full_rebuild=False, progress_callback=None: {
+            "chunk_count": len(chunks),
+            "reused_embedding_count": 0,
+            "embedded_chunk_count": len(chunks),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ingest,
+        "index_graph_vectors_generation",
+        lambda nodes, edges, generation_id: {
+            "graph_entity_index_count": len(nodes),
+            "graph_relationship_index_count": len(edges),
+            "graph_reused_embedding_count": 0,
+            "graph_embedded_record_count": len(nodes) + len(edges),
+        },
+        raising=False,
+    )
+
+    result = ingest.ingest_knowledge_base()
+
+    assert result["generation_id"].startswith("gen-")
+    assert index_generation.load_index_state()["active_generation"] == result["generation_id"]
+    assert index_generation.generation_artifact_path(result["generation_id"], "categories.json").exists()
+    assert index_generation.generation_artifact_path(result["generation_id"], "graph.json").exists()
+
+
+def test_ingest_failure_keeps_previous_generation_active(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.document import ingest
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.txt").write_text("生产知识", encoding="utf-8")
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    index_generation.publish_generation("gen-stable", {"permission_schema_version": 1})
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    monkeypatch.setattr(
+        ingest,
+        "build_generation_chunks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("vector build failed")),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="vector build failed"):
+        ingest.ingest_knowledge_base()
+
+    assert index_generation.load_index_state()["active_generation"] == "gen-stable"
 
 
 def test_incremental_ingest_removes_deleted_documents_from_vectors_and_graph(tmp_path, monkeypatch):
@@ -147,23 +236,10 @@ def test_incremental_ingest_removes_deleted_documents_from_vectors_and_graph(tmp
     docs_dir.mkdir()
     doc_path = docs_dir / "a.txt"
     doc_path.write_text("关于一渠一表的报告\n项目材料包含一渠一表。", encoding="utf-8")
-    _, _, graph_path = _configure_incremental_paths(tmp_path, monkeypatch)
+    _configure_incremental_paths(tmp_path, monkeypatch)
     monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
     monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
-    upserts = []
-    monkeypatch.setattr(
-        ingest,
-        "upsert_chunks_incremental",
-        lambda chunks, delete_chunk_ids=None, progress_callback=None: upserts.append(
-            {"ids": [chunk["id"] for chunk in chunks], "delete_chunk_ids": list(delete_chunk_ids or [])}
-        )
-        or len(chunks),
-    )
-    monkeypatch.setattr(
-        ingest,
-        "index_graph_vectors_incremental",
-        lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
-    )
+    builds = _capture_generation_builds(ingest, monkeypatch)
 
     first = ingest.ingest_knowledge_base()
     doc_path.unlink()
@@ -176,9 +252,11 @@ def test_incremental_ingest_removes_deleted_documents_from_vectors_and_graph(tmp
     assert second["chunk_count"] == 0
     assert second["graph_node_count"] == 0
     assert second["graph_edge_count"] == 0
-    assert upserts[-1]["ids"] == []
-    assert upserts[-1]["delete_chunk_ids"]
-    payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert builds[-1]["ids"] == []
+    assert second["removed_document_count"] == 1
+    from services.rag_api import index_generation
+
+    payload = json.loads(index_generation.generation_artifact_path(second["generation_id"], "graph.json").read_text(encoding="utf-8"))
     assert payload["nodes"] == []
     assert payload["edges"] == []
 
@@ -193,24 +271,14 @@ def test_incremental_ingest_skips_duplicate_content(tmp_path, monkeypatch):
     _configure_incremental_paths(tmp_path, monkeypatch)
     monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
     monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
-    upserts = []
-    monkeypatch.setattr(
-        ingest,
-        "upsert_chunks_incremental",
-        lambda chunks, delete_chunk_ids=None, progress_callback=None: upserts.append([chunk["id"] for chunk in chunks]) or len(chunks),
-    )
-    monkeypatch.setattr(
-        ingest,
-        "index_graph_vectors_incremental",
-        lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
-    )
+    builds = _capture_generation_builds(ingest, monkeypatch)
 
     result = ingest.ingest_knowledge_base()
 
     assert result["processed_document_count"] == 1
     assert result["duplicate_document_count"] == 1
     assert result["document_count"] == 1
-    assert len(upserts) == 1
+    assert len(builds) == 1
 
 
 def test_incremental_ingest_reprocesses_when_pipeline_fingerprint_changes(tmp_path, monkeypatch):
@@ -227,20 +295,7 @@ def test_incremental_ingest_reprocesses_when_pipeline_fingerprint_changes(tmp_pa
         "load_rag_settings",
         lambda: RagSettings(chunk_size=active_settings["chunk_size"], chunk_overlap=20),
     )
-    upserts = []
-    monkeypatch.setattr(
-        ingest,
-        "upsert_chunks_incremental",
-        lambda chunks, delete_chunk_ids=None, progress_callback=None: upserts.append(
-            {"ids": [chunk["id"] for chunk in chunks], "delete_chunk_ids": list(delete_chunk_ids or [])}
-        )
-        or len(chunks),
-    )
-    monkeypatch.setattr(
-        ingest,
-        "index_graph_vectors_incremental",
-        lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
-    )
+    builds = _capture_generation_builds(ingest, monkeypatch)
 
     first = ingest.ingest_knowledge_base()
     active_settings["chunk_size"] = 220
@@ -249,8 +304,8 @@ def test_incremental_ingest_reprocesses_when_pipeline_fingerprint_changes(tmp_pa
     assert first["processed_document_count"] == 1
     assert second["processed_document_count"] == 1
     assert second["skipped_document_count"] == 0
-    assert len(upserts) == 2
-    assert upserts[1]["delete_chunk_ids"] == upserts[0]["ids"]
+    assert len(builds) == 2
+    assert builds[1]["embedded"] == 0
 
 
 def test_full_rebuild_reprocesses_unchanged_documents(tmp_path, monkeypatch):
@@ -262,20 +317,7 @@ def test_full_rebuild_reprocesses_unchanged_documents(tmp_path, monkeypatch):
     _configure_incremental_paths(tmp_path, monkeypatch)
     monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
     monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
-    upserts = []
-    monkeypatch.setattr(
-        ingest,
-        "upsert_chunks_incremental",
-        lambda chunks, delete_chunk_ids=None, progress_callback=None: upserts.append(
-            {"ids": [chunk["id"] for chunk in chunks], "delete_chunk_ids": list(delete_chunk_ids or [])}
-        )
-        or len(chunks),
-    )
-    monkeypatch.setattr(
-        ingest,
-        "index_graph_vectors_incremental",
-        lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
-    )
+    builds = _capture_generation_builds(ingest, monkeypatch)
 
     first = ingest.ingest_knowledge_base()
     second = ingest.ingest_knowledge_base(full_rebuild=True)
@@ -284,8 +326,9 @@ def test_full_rebuild_reprocesses_unchanged_documents(tmp_path, monkeypatch):
     assert second["incremental"] is False
     assert second["processed_document_count"] == 1
     assert second["skipped_document_count"] == 0
-    assert len(upserts) == 2
-    assert upserts[1]["delete_chunk_ids"] == upserts[0]["ids"]
+    assert len(builds) == 2
+    assert builds[1]["full_rebuild"] is True
+    assert builds[1]["embedded"] == len(builds[1]["ids"])
 
 
 def test_split_documents_uses_content_addressed_chunk_ids_and_metadata():
@@ -322,3 +365,25 @@ def test_split_documents_uses_content_addressed_chunk_ids_and_metadata():
     assert chunks[0]["metadata"]["effective_at"] == "2026-07-01T00:00:00Z"
     assert chunks[0]["metadata"]["policy_ref"] == "policy-sales"
     assert chunks[0]["metadata"]["acl_revision"] == "7"
+
+
+def test_multi_vector_chunks_have_content_hashes_for_their_own_text():
+    import hashlib
+    import re
+
+    from services.rag_api.document.multi_vector import expand_multi_vector_chunks
+
+    base = {
+        "id": "doc-a::chunk::base::001",
+        "content": "第一段内容。\n第二段不同内容。",
+        "metadata": {"document_id": "doc-a", "chunk_hash": "parent-hash"},
+    }
+
+    chunks = expand_multi_vector_chunks([base], RagSettings(multi_vector_enabled=True))
+
+    assert len({chunk["id"] for chunk in chunks}) == len(chunks)
+    for chunk in chunks:
+        normalized = re.sub(r"\s+", " ", chunk["content"]).strip()
+        expected_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        assert chunk["metadata"]["chunk_hash"] == expected_hash
+        assert chunk["metadata"]["chunk_id"] == chunk["id"]

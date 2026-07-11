@@ -10,8 +10,13 @@ from typing import Any
 from services.rag_api.graph.graph_store import KB_GRAPH_PATH
 
 
-def build_and_save_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, Any]:
-    return save_kb_graph(build_kb_graph(category_payload, documents, chunks))
+def build_and_save_kb_graph(
+    category_payload: dict[str, Any],
+    documents: list[dict[str, Any]],
+    chunks: list[dict[str, Any]],
+    path: Path | None = None,
+) -> dict[str, Any]:
+    return save_kb_graph(build_kb_graph(category_payload, documents, chunks), path=path)
 
 
 def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, Any]:

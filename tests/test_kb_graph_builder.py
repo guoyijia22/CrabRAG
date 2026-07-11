@@ -69,7 +69,7 @@ def test_graph_payload_hides_static_graph_when_no_source_files(monkeypatch):
     from services.rag_api.graph import graph_api
     from services.rag_api.graph.graph_store import static_edges, static_nodes
 
-    monkeypatch.setattr(graph_api, "load_raw_graph", lambda path: (static_nodes(), static_edges(), "static_graph"))
+    monkeypatch.setattr(graph_api, "load_raw_graph", lambda path=None: (static_nodes(), static_edges(), "static_graph"))
     monkeypatch.setattr(graph_api, "load_kb_categories", lambda: {"items": []})
 
     payload = graph_api.build_graph_payload()

@@ -3,13 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 from services.rag_api.document.categories import load_kb_categories
-from services.rag_api.graph.graph_store import KB_GRAPH_PATH, load_raw_graph
+from services.rag_api.graph.graph_store import KB_GRAPH_PATH as DEFAULT_KB_GRAPH_PATH, load_raw_graph
 from services.rag_api.graph.schema_config import load_graph_schema
+
+
+KB_GRAPH_PATH = DEFAULT_KB_GRAPH_PATH
 
 
 def build_graph_payload() -> dict[str, Any]:
     schema = load_graph_schema()
-    raw_nodes, raw_edges, graph_source = load_raw_graph(KB_GRAPH_PATH)
+    raw_nodes, raw_edges, graph_source = load_raw_graph(None if KB_GRAPH_PATH == DEFAULT_KB_GRAPH_PATH else KB_GRAPH_PATH)
     nodes = [_node_payload(node, schema) for node in raw_nodes]
     edges = [_edge_payload(edge, schema) for edge in raw_edges]
     graph_source_files = _graph_source_files(nodes, edges)

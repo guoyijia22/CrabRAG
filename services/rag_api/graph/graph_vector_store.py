@@ -7,6 +7,7 @@ from typing import Any
 from chromadb.utils.batch_utils import create_batches
 
 from services.rag_api.config import PROJECT_DIR, get_settings
+from services.rag_api import index_generation
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.vector.chroma_store import EMBEDDING_BATCH_SIZE
 from services.rag_api.vector.chroma_store import _get_chroma_client
@@ -44,6 +45,21 @@ def index_graph_vectors_incremental(nodes: list[dict[str, Any]], edges: list[dic
     }
 
 
+def index_graph_vectors_generation(nodes: list[dict[str, Any]], edges: list[dict[str, Any]], generation_id: str) -> dict[str, int]:
+    entity_records = [_entity_record(node) for node in nodes if _node_id(node)]
+    relationship_records = [_relationship_record(edge) for edge in edges if _edge_source(edge) and _edge_target(edge)]
+    entity_name = index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_entity")
+    relationship_name = index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_relationship")
+    entity_stats = _build_generation_collection(entity_name, entity_records, generation_id, "graph_entity")
+    relationship_stats = _build_generation_collection(relationship_name, relationship_records, generation_id, "graph_relationship")
+    return {
+        "graph_entity_index_count": len(entity_records),
+        "graph_relationship_index_count": len(relationship_records),
+        "graph_reused_embedding_count": entity_stats["reused"] + relationship_stats["reused"],
+        "graph_embedded_record_count": entity_stats["embedded"] + relationship_stats["embedded"],
+    }
+
+
 def search_graph_entities(query: str, top_k: int = 6) -> list[dict[str, Any]]:
     return _search_collection(entity_collection_name(), query, top_k)
 
@@ -53,10 +69,16 @@ def search_graph_relationships(query: str, top_k: int = 6) -> list[dict[str, Any
 
 
 def entity_collection_name() -> str:
+    generation_id = index_generation.active_generation_id()
+    if generation_id:
+        return index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_entity")
     return f"{_base_collection_name()}{ENTITY_SUFFIX}"
 
 
 def relationship_collection_name() -> str:
+    generation_id = index_generation.active_generation_id()
+    if generation_id:
+        return index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_relationship")
     return f"{_base_collection_name()}{RELATIONSHIP_SUFFIX}"
 
 
@@ -85,6 +107,71 @@ def _reset_and_add(collection_name: str, records: list[dict[str, Any]]) -> None:
         documents=documents,
     ):
         collection.add(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
+
+
+def _build_generation_collection(
+    collection_name: str,
+    records: list[dict[str, Any]],
+    generation_id: str,
+    kind: str,
+) -> dict[str, int]:
+    client = _get_chroma_client()
+    try:
+        client.delete_collection(collection_name)
+    except Exception:
+        pass
+    collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+    reusable = _load_generation_embeddings(client, kind)
+    missing: list[dict[str, Any]] = []
+    embeddings_by_id: dict[str, list[float]] = {}
+    for record in records:
+        record_hash = _record_hash(record)
+        record["metadata"] = {**record["metadata"], "record_hash": record_hash, "generation_id": generation_id}
+        embedding = reusable.get(record_hash)
+        if embedding is None:
+            missing.append(record)
+        else:
+            embeddings_by_id[record["id"]] = embedding
+    if missing:
+        for record, embedding in zip(missing, _embed_documents([record["document"] for record in missing])):
+            embeddings_by_id[record["id"]] = embedding
+    if records:
+        for batch_ids, batch_embeddings, batch_metadatas, batch_documents in create_batches(
+            client,
+            ids=[record["id"] for record in records],
+            embeddings=[embeddings_by_id[record["id"]] for record in records],
+            metadatas=[record["metadata"] for record in records],
+            documents=[record["document"] for record in records],
+        ):
+            collection.upsert(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
+    if collection.count() != len(records):
+        raise RuntimeError(f"图谱索引代写入数量不一致：expected={len(records)}, actual={collection.count()}")
+    return {"reused": len(records) - len(missing), "embedded": len(missing)}
+
+
+def _load_generation_embeddings(client, kind: str) -> dict[str, list[float]]:
+    active_generation = index_generation.active_generation_id()
+    if active_generation:
+        source_name = index_generation.generation_collection_name(_base_collection_name(), active_generation, kind)
+    elif kind == "graph_entity":
+        source_name = f"{_base_collection_name()}{ENTITY_SUFFIX}"
+    else:
+        source_name = f"{_base_collection_name()}{RELATIONSHIP_SUFFIX}"
+    try:
+        source = client.get_or_create_collection(name=source_name, metadata={"hnsw:space": "cosine"})
+        result = source.get(include=["documents", "metadatas", "embeddings"])
+    except Exception:
+        return {}
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    raw_embeddings = result.get("embeddings")
+    embeddings = list(raw_embeddings) if raw_embeddings is not None else []
+    reusable: dict[str, list[float]] = {}
+    for document, metadata, embedding in zip(documents, metadatas, embeddings):
+        metadata = metadata or {}
+        record_hash = str(metadata.get("record_hash") or _record_hash({"document": document, "metadata": metadata}))
+        reusable.setdefault(record_hash, [float(value) for value in embedding])
+    return reusable
 
 
 def _sync_collection(collection_name: str, records: list[dict[str, Any]], previous: dict[str, Any]) -> dict[str, str]:
@@ -247,7 +334,12 @@ def _save_manifest(manifest: dict[str, Any]) -> None:
 
 
 def _record_hash(record: dict[str, Any]) -> str:
-    payload = {"document": record.get("document", ""), "metadata": record.get("metadata", {})}
+    metadata = {
+        key: value
+        for key, value in (record.get("metadata", {}) or {}).items()
+        if key not in {"record_hash", "generation_id"}
+    }
+    payload = {"document": record.get("document", ""), "metadata": metadata}
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

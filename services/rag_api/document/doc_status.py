@@ -21,11 +21,12 @@ def empty_manifest() -> dict[str, Any]:
     return {"version": 1, "documents": {}, "updated_at": ""}
 
 
-def load_manifest() -> dict[str, Any]:
-    if not DOC_STATUS_PATH.exists():
+def load_manifest(path: Path | None = None) -> dict[str, Any]:
+    manifest_path = path or DOC_STATUS_PATH
+    if not manifest_path.exists():
         return empty_manifest()
     try:
-        payload = json.loads(DOC_STATUS_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return empty_manifest()
     if not isinstance(payload, dict) or not isinstance(payload.get("documents"), dict):
@@ -35,10 +36,11 @@ def load_manifest() -> dict[str, Any]:
     return payload
 
 
-def save_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+def save_manifest(manifest: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
+    manifest_path = path or DOC_STATUS_PATH
     manifest["updated_at"] = _now()
-    DOC_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    DOC_STATUS_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return manifest
 
 
@@ -73,8 +75,18 @@ def pipeline_fingerprint(settings: Settings, rag_settings: RagSettings) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def load_snapshot(doc_id: str) -> dict[str, Any] | None:
-    path = _snapshot_path(doc_id)
+def embedding_fingerprint(settings: Settings) -> str:
+    payload = {
+        "embedding_provider": settings.embedding_provider,
+        "embedding_model": settings.embedding_model,
+        "embedding_onnx_model_file": settings.embedding_onnx_model_file,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def load_snapshot(doc_id: str, directory: Path | None = None) -> dict[str, Any] | None:
+    path = _snapshot_path(doc_id, directory)
     if not path.exists():
         return None
     try:
@@ -84,17 +96,18 @@ def load_snapshot(doc_id: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def save_snapshot(doc_id: str, document: dict[str, Any], chunks: list[dict[str, Any]]) -> None:
-    DOC_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    _snapshot_path(doc_id).write_text(
+def save_snapshot(doc_id: str, document: dict[str, Any], chunks: list[dict[str, Any]], directory: Path | None = None) -> None:
+    snapshot_dir = directory or DOC_SNAPSHOT_DIR
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    _snapshot_path(doc_id, snapshot_dir).write_text(
         json.dumps({"document": document, "chunks": chunks, "updated_at": _now()}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def delete_snapshot(doc_id: str) -> None:
+def delete_snapshot(doc_id: str, directory: Path | None = None) -> None:
     try:
-        _snapshot_path(doc_id).unlink()
+        _snapshot_path(doc_id, directory).unlink()
     except FileNotFoundError:
         pass
 
@@ -187,9 +200,9 @@ def failed_record(
     }
 
 
-def _snapshot_path(doc_id: str) -> Path:
+def _snapshot_path(doc_id: str, directory: Path | None = None) -> Path:
     safe = "".join(ch for ch in doc_id if ch.isalnum() or ch in {"-", "_"})
-    return DOC_SNAPSHOT_DIR / f"{safe}.json"
+    return (directory or DOC_SNAPSHOT_DIR) / f"{safe}.json"
 
 
 def _now() -> str:

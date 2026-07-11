@@ -240,8 +240,9 @@ def test_heuristic_classify_does_not_emit_default_category_for_empty_kb(monkeypa
 
 
 def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
     from services.rag_api.config import Settings
-    from services.rag_api.document import ingest
+    from services.rag_api.document import doc_status, ingest
     from services.rag_api.rag_settings import RagSettings
 
     first = tmp_path / "docs-a"
@@ -250,6 +251,12 @@ def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypat
     second.mkdir()
     (first / "a.txt").write_text("客户准入材料", encoding="utf-8")
     captured = {}
+    index_root = tmp_path / "data" / "index"
+    monkeypatch.setattr(index_generation, "INDEX_ROOT", index_root)
+    monkeypatch.setattr(index_generation, "ACTIVE_INDEX_PATH", index_root / "active.json")
+    monkeypatch.setattr(index_generation, "GENERATIONS_DIR", index_root / "generations")
+    monkeypatch.setattr(doc_status, "DOC_STATUS_PATH", tmp_path / "data" / "doc_status.json")
+    monkeypatch.setattr(doc_status, "DOC_SNAPSHOT_DIR", tmp_path / "data" / "snapshots")
 
     def fake_scan_supported_files(dirs):
         captured["dirs"] = dirs
@@ -262,18 +269,26 @@ def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypat
     monkeypatch.setattr(ingest, "split_documents", lambda documents, chunk_size, chunk_overlap: [{"id": "1", "content": "客户准入材料", "metadata": {"source_file": "a.txt", "category": "客户准入"}}])
     monkeypatch.setattr(ingest, "expand_multi_vector_chunks", lambda chunks, rag_settings: chunks)
     monkeypatch.setattr(ingest, "embedding_batch_count", lambda count: 1)
-    monkeypatch.setattr(ingest, "upsert_chunks_incremental", lambda chunks, delete_chunk_ids=None, progress_callback=None: len(chunks))
-    monkeypatch.setattr(ingest, "save_kb_categories", lambda documents, chunks: {"items": [], "categories": []})
+    monkeypatch.setattr(
+        ingest,
+        "build_generation_chunks",
+        lambda chunks, generation_id, full_rebuild=False, progress_callback=None: {
+            "chunk_count": len(chunks),
+            "reused_embedding_count": 0,
+            "embedded_chunk_count": len(chunks),
+        },
+    )
+    monkeypatch.setattr(ingest, "save_kb_categories", lambda documents, chunks, path=None: {"items": [], "categories": []})
     monkeypatch.setattr(ingest, "read_app_config", lambda: (_ for _ in ()).throw(AssertionError("rebuild must not read common questions")), raising=False)
     monkeypatch.setattr(ingest, "generate_common_questions", lambda category_payload: (_ for _ in ()).throw(AssertionError("rebuild must not generate common questions")), raising=False)
     monkeypatch.setattr(ingest, "write_common_questions", lambda questions: (_ for _ in ()).throw(AssertionError("rebuild must not overwrite common questions")), raising=False)
     monkeypatch.setattr(ingest, "ensure_knowledge_base_name", lambda category_payload, documents, chunk_count: ("测试知识库", "test"))
-    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", lambda category_payload, documents, chunks: {})
-    monkeypatch.setattr(ingest, "build_and_save_kb_graph", lambda category_payload, documents, chunks: {"nodes": [{"id": "客户准入"}], "edges": [{"id": "edge-1"}]}, raising=False)
+    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", lambda category_payload, documents, chunks, path=None: {})
+    monkeypatch.setattr(ingest, "build_and_save_kb_graph", lambda category_payload, documents, chunks, path=None: {"nodes": [{"id": "客户准入"}], "edges": [{"id": "edge-1"}]}, raising=False)
     monkeypatch.setattr(
         ingest,
-        "index_graph_vectors_incremental",
-        lambda nodes, edges: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
+        "index_graph_vectors_generation",
+        lambda nodes, edges, generation_id: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
     )
 
     result = ingest.ingest_knowledge_base()

@@ -38,7 +38,7 @@ def infer_document_category(source_file: str, text: str = "") -> str:
     return _category_from_filename(source_file)
 
 
-def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, Any]:
+def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, Any]], path: Path | None = None) -> dict[str, Any]:
     doc_categories = {doc["source_file"]: infer_document_category(doc["source_file"], doc.get("content", "")) for doc in documents}
     chunk_counter: Counter[str] = Counter()
     source_files: dict[str, set[str]] = defaultdict(set)
@@ -75,16 +75,20 @@ def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, A
         "categories": [item["name"] for item in items],
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-    KB_CATEGORIES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    KB_CATEGORIES_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    categories_path = path or KB_CATEGORIES_PATH
+    categories_path.parent.mkdir(parents=True, exist_ok=True)
+    categories_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
 
 
 def load_kb_categories() -> dict[str, Any]:
-    if not KB_CATEGORIES_PATH.exists():
+    from services.rag_api.index_generation import active_artifact_path
+
+    categories_path = active_artifact_path("categories.json", KB_CATEGORIES_PATH)
+    if not categories_path.exists():
         return default_categories_payload()
     try:
-        payload = json.loads(KB_CATEGORIES_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(categories_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default_categories_payload()
     items = payload.get("items")
