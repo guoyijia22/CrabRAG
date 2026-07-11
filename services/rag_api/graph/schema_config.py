@@ -87,9 +87,9 @@ def load_graph_schema() -> dict[str, Any]:
 
 
 def load_graph_schema_suggestion() -> dict[str, Any]:
-    from services.rag_api.index_generation import active_artifact_path
+    from services.rag_api.security import pinned_artifact_path
 
-    suggestion_path = active_artifact_path("graph_schema_suggestion.json", GRAPH_SCHEMA_SUGGESTION_PATH)
+    suggestion_path = pinned_artifact_path("graph_schema_suggestion.json", GRAPH_SCHEMA_SUGGESTION_PATH)
     if not suggestion_path.exists():
         fallback = default_graph_schema()
         fallback["status"] = "missing"

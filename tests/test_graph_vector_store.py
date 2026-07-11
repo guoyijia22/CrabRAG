@@ -138,6 +138,27 @@ def test_search_graph_vectors_returns_normalized_payloads(monkeypatch):
     assert results[0]["score"] == 0.9
 
 
+def test_graph_generation_expands_aggregated_entity_per_source_document(monkeypatch):
+    from services.rag_api.graph import graph_vector_store
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(graph_vector_store, "_get_chroma_client", lambda: fake_client)
+    monkeypatch.setattr(graph_vector_store, "embed_texts", lambda texts: [[1.0] for _ in texts])
+    monkeypatch.setattr(graph_vector_store, "_base_collection_name", lambda: "kb")
+    monkeypatch.setattr(graph_vector_store.index_generation, "active_generation_id", lambda: None)
+
+    stats = graph_vector_store.index_graph_vectors_generation(
+        [{"id": "category", "label": "category", "document_ids": ["doc-a", "doc-b"], "source_files": ["a.txt", "b.txt"]}],
+        [],
+        "gen-1",
+    )
+
+    collection = fake_client.collections["kb__graph_entity__gen-1"]
+    metadatas = [metadata for batch in collection.upserted for metadata in batch["metadatas"]]
+    assert stats["graph_entity_index_count"] == 2
+    assert {metadata["document_id"] for metadata in metadatas} == {"doc-a", "doc-b"}
+
+
 def test_index_graph_vectors_incremental_upserts_only_changed_records(tmp_path, monkeypatch):
     from services.rag_api.graph import graph_vector_store
 

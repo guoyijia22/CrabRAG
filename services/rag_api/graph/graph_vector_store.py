@@ -8,6 +8,7 @@ from chromadb.utils.batch_utils import create_batches
 
 from services.rag_api.config import PROJECT_DIR, get_settings
 from services.rag_api import index_generation
+from services.rag_api.security import current_retrieval_context
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.vector.chroma_store import EMBEDDING_BATCH_SIZE
 from services.rag_api.vector.chroma_store import _get_chroma_client
@@ -18,7 +19,7 @@ GRAPH_VECTOR_MANIFEST_PATH = PROJECT_DIR / "data" / "ingest" / "graph_vector_man
 
 
 def index_graph_vectors(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int]:
-    entity_chunks = [_entity_record(node) for node in nodes if _node_id(node)]
+    entity_chunks = [record for node in nodes if _node_id(node) for record in _entity_records(node)]
     relationship_chunks = [_relationship_record(edge) for edge in edges if _edge_source(edge) and _edge_target(edge)]
     _reset_and_add(entity_collection_name(), entity_chunks)
     _reset_and_add(relationship_collection_name(), relationship_chunks)
@@ -29,7 +30,7 @@ def index_graph_vectors(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
 
 
 def index_graph_vectors_incremental(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int]:
-    entity_records = [_entity_record(node) for node in nodes if _node_id(node)]
+    entity_records = [record for node in nodes if _node_id(node) for record in _entity_records(node)]
     relationship_records = [_relationship_record(edge) for edge in edges if _edge_source(edge) and _edge_target(edge)]
     manifest = _load_manifest()
     manifest["entities"] = _sync_collection(entity_collection_name(), entity_records, manifest.get("entities", {}))
@@ -46,7 +47,7 @@ def index_graph_vectors_incremental(nodes: list[dict[str, Any]], edges: list[dic
 
 
 def index_graph_vectors_generation(nodes: list[dict[str, Any]], edges: list[dict[str, Any]], generation_id: str) -> dict[str, int]:
-    entity_records = [_entity_record(node) for node in nodes if _node_id(node)]
+    entity_records = [record for node in nodes if _node_id(node) for record in _entity_records(node)]
     relationship_records = [_relationship_record(edge) for edge in edges if _edge_source(edge) and _edge_target(edge)]
     entity_name = index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_entity")
     relationship_name = index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_relationship")
@@ -69,14 +70,16 @@ def search_graph_relationships(query: str, top_k: int = 6) -> list[dict[str, Any
 
 
 def entity_collection_name() -> str:
-    generation_id = index_generation.active_generation_id()
+    context = current_retrieval_context()
+    generation_id = context.generation_id if context and context.generation_id != "legacy" else index_generation.active_generation_id()
     if generation_id:
         return index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_entity")
     return f"{_base_collection_name()}{ENTITY_SUFFIX}"
 
 
 def relationship_collection_name() -> str:
-    generation_id = index_generation.active_generation_id()
+    context = current_retrieval_context()
+    generation_id = context.generation_id if context and context.generation_id != "legacy" else index_generation.active_generation_id()
     if generation_id:
         return index_generation.generation_collection_name(_base_collection_name(), generation_id, "graph_relationship")
     return f"{_base_collection_name()}{RELATIONSHIP_SUFFIX}"
@@ -206,35 +209,54 @@ def _upsert_records(client, collection, records: list[dict[str, Any]]) -> None:
 def _search_collection(collection_name: str, query: str, top_k: int) -> list[dict[str, Any]]:
     if not query.strip():
         return []
+    context = current_retrieval_context()
+    allowed_document_ids = context.allowed_document_ids if context else None
+    if allowed_document_ids is not None and not allowed_document_ids:
+        return []
     client = _get_chroma_client()
     collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
     if collection.count() == 0:
         return []
     query_embedding = embed_texts([query])[0]
-    result = collection.query(query_embeddings=[query_embedding], n_results=top_k, include=["documents", "metadatas", "distances"])
+    query_kwargs: dict[str, Any] = {
+        "query_embeddings": [query_embedding],
+        "n_results": top_k,
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if allowed_document_ids is not None:
+        query_kwargs["where"] = {"document_id": {"$in": sorted(allowed_document_ids)}}
+    result = collection.query(**query_kwargs)
     hits: list[dict[str, Any]] = []
     for document, metadata, distance in zip(result.get("documents", [[]])[0], result.get("metadatas", [[]])[0], result.get("distances", [[]])[0]):
+        if allowed_document_ids is not None and str((metadata or {}).get("document_id") or "") not in allowed_document_ids:
+            continue
         score = round(max(0.0, 1.0 - float(distance)), 4)
         hits.append({**_normalize_metadata(metadata or {}), "document": document, "score": score})
     return hits
 
 
-def _entity_record(node: dict[str, Any]) -> dict[str, Any]:
+def _entity_records(node: dict[str, Any]) -> list[dict[str, Any]]:
+    document_ids = sorted({str(item) for item in node.get("document_ids", []) or [] if item})
+    return [_entity_record(node, document_id) for document_id in document_ids] if document_ids else [_entity_record(node, "")]
+
+
+def _entity_record(node: dict[str, Any], document_id: str = "") -> dict[str, Any]:
     node_id = _node_id(node)
     label = str(node.get("label") or node_id)
     node_type = str(node.get("type") or "")
     category = str(node.get("category") or "")
     source_files = [str(item) for item in node.get("source_files", []) or [] if item]
+    visible_source_files = source_files if len(node.get("document_ids", []) or []) <= 1 else []
     document = "\n".join(
         [
             f"实体：{label}",
             f"类型：{node_type}",
             f"分类：{category}",
-            f"来源文件：{'、'.join(source_files)}",
+            f"来源文件：{'、'.join(visible_source_files)}",
         ]
     )
     return {
-        "id": f"entity::{node_id}",
+        "id": f"entity::{node_id}::doc::{document_id}" if document_id else f"entity::{node_id}",
         "document": document,
         "metadata": _clean_metadata(
             {
@@ -242,7 +264,8 @@ def _entity_record(node: dict[str, Any]) -> dict[str, Any]:
                 "label": label,
                 "type": node_type,
                 "category": category,
-                "source_files": source_files,
+                "source_files": visible_source_files,
+                "document_id": document_id,
             }
         ),
     }
@@ -276,6 +299,7 @@ def _relationship_record(edge: dict[str, Any]) -> dict[str, Any]:
                 "description": description,
                 "evidence": evidence,
                 "source_file": source_file,
+                "document_id": str(edge.get("document_id") or ""),
                 "confidence": edge.get("confidence", 0.8),
             }
         ),

@@ -13,6 +13,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     session_id: str
+    index_generation: str = "legacy"
     intent: str = ""
     question_type: str = ""
     retrieval_mode: str = ""

@@ -16,6 +16,7 @@ from services.rag_api.document.categories import source_files_for_category
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.rag_settings import load_rag_settings
 from services.rag_api import index_generation
+from services.rag_api.security import current_retrieval_context
 
 EMBEDDING_BATCH_SIZE = 64
 _COLLECTION_OVERRIDE: ContextVar[str | None] = ContextVar("collection_name_override", default=None)
@@ -194,7 +195,8 @@ def _collection_name() -> str:
     if override:
         return override
     base = get_settings().collection_name
-    generation_id = index_generation.active_generation_id()
+    context = current_retrieval_context()
+    generation_id = context.generation_id if context and context.generation_id != "legacy" else index_generation.active_generation_id()
     return index_generation.generation_collection_name(base, generation_id, "text") if generation_id else base
 
 
@@ -234,13 +236,25 @@ def search_chunks(query: str, intent: str, entities: list[str] | None = None, to
     min_score = rag_settings.min_score if min_score is None else min_score
     candidate_k = max(rag_settings.vector_candidate_k, top_k * 4) if candidate_k is None else candidate_k
     entities = entities or []
+    allowed_document_ids = _allowed_document_ids()
+    if allowed_document_ids is not None and not allowed_document_ids:
+        return []
     collection = get_collection()
     if collection.count() == 0:
         return []
     query_embedding = embed_texts([query])[0]
-    result = collection.query(query_embeddings=[query_embedding], n_results=max(candidate_k, top_k), include=["documents", "metadatas", "distances"])
+    query_kwargs: dict[str, Any] = {
+        "query_embeddings": [query_embedding],
+        "n_results": max(candidate_k, top_k),
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if allowed_document_ids is not None:
+        query_kwargs["where"] = {"document_id": {"$in": sorted(allowed_document_ids)}}
+    result = collection.query(**query_kwargs)
     candidates: list[dict] = []
     for doc, meta, distance in zip(result.get("documents", [[]])[0], result.get("metadatas", [[]])[0], result.get("distances", [[]])[0]):
+        if not _metadata_allowed(meta or {}, allowed_document_ids):
+            continue
         vector_score = max(0.0, 1.0 - float(distance))
         intent_score = 1.0 if meta.get("category") == intent else 0.0
         entity_score = _entity_match_score(doc, entities)
@@ -253,10 +267,16 @@ def search_chunks(query: str, intent: str, entities: list[str] | None = None, to
 
 
 def search_all_chunks() -> list[dict]:
+    allowed_document_ids = _allowed_document_ids()
+    if allowed_document_ids is not None and not allowed_document_ids:
+        return []
     collection = get_collection()
     if collection.count() == 0:
         return []
-    result = collection.get(include=["documents", "metadatas"])
+    get_kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
+    if allowed_document_ids is not None:
+        get_kwargs["where"] = {"document_id": {"$in": sorted(allowed_document_ids)}}
+    result = collection.get(**get_kwargs)
     return [_chunk_payload(doc, meta, 0.0, "all") for doc, meta in zip(result.get("documents", []), result.get("metadatas", []))]
 
 
@@ -280,6 +300,7 @@ def search_chunks_by_keywords(query: str, intent: str, entities: list[str] | Non
 
 
 def _chunk_payload(doc: str, meta: dict, score: float, channel: str) -> dict:
+    context = current_retrieval_context()
     return {
         "content": doc,
         "source_file": meta.get("source_file", ""),
@@ -288,9 +309,27 @@ def _chunk_payload(doc: str, meta: dict, score: float, channel: str) -> dict:
         "section_title": meta.get("section_title", ""),
         "granularity": meta.get("granularity", "chunk"),
         "parent_chunk_id": meta.get("parent_chunk_id", ""),
+        "document_id": meta.get("document_id", meta.get("doc_id", "")),
+        "document_version": meta.get("document_version", ""),
+        "effective_at": meta.get("effective_at", ""),
+        "updated_at": meta.get("updated_at", ""),
+        "acl_revision": meta.get("acl_revision", ""),
+        "index_generation": context.generation_id if context else (meta.get("generation_id", "") or "legacy"),
         "score": round(score, 4),
         "retrieval_channel": channel,
     }
+
+
+def _allowed_document_ids() -> frozenset[str] | None:
+    context = current_retrieval_context()
+    return context.allowed_document_ids if context else None
+
+
+def _metadata_allowed(metadata: dict[str, Any], allowed_document_ids: frozenset[str] | None) -> bool:
+    if allowed_document_ids is None:
+        return True
+    document_id = str(metadata.get("document_id") or metadata.get("doc_id") or "")
+    return document_id in allowed_document_ids
 
 
 def _entity_match_score(text: str, entities: list[str]) -> float:

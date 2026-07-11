@@ -12,6 +12,7 @@ from services.rag_api.graph.graph_store import load_raw_graph
 from services.rag_api.graph.query_keywords import split_graph_query_keywords
 from services.rag_api.graph.relations import RELATIONS
 from services.rag_api.llm.siliconflow_client import chat_completion
+from services.rag_api.security import filter_graph_by_permission
 
 KB_GRAPH_PATH = DEFAULT_KB_GRAPH_PATH
 COMMON_QUERY_TERMS = [
@@ -120,7 +121,8 @@ def _static_graph_relation_search(query: str, intent: str, top_k: int) -> dict:
 
 
 def _dynamic_graph_relation_search(query: str, intent: str, top_k: int) -> dict | None:
-    nodes, edges, graph_source = load_raw_graph(KB_GRAPH_PATH)
+    nodes, edges, graph_source = load_raw_graph(None if KB_GRAPH_PATH == DEFAULT_KB_GRAPH_PATH else KB_GRAPH_PATH)
+    nodes, edges = filter_graph_by_permission(nodes, edges)
     if graph_source != "dynamic_graph" or not edges:
         return None
     keyword_info = split_graph_query_keywords(query, intent, [], nodes=nodes, edges=edges)
@@ -299,6 +301,7 @@ def _global_relation_paths_from_relationship_hits(relationship_hits: list[dict[s
             "description": hit.get("description", ""),
             "evidence": hit.get("evidence", ""),
             "source_file": hit.get("source_file", ""),
+            "document_id": hit.get("document_id", ""),
             "confidence": hit.get("confidence", 0.8),
         }
         paths.append(_format_dynamic_relation(edge, _float_value(hit.get("score"), 0.0), match_source="relationship_vector"))
@@ -341,6 +344,7 @@ def _format_dynamic_relation(edge: dict[str, Any], score: float, *, match_source
         "path": f"{source} -> {relation} -> {target}",
         "description": str(edge.get("description") or edge.get("evidence") or ""),
         "source_file": str(edge.get("source_file") or ""),
+        "document_id": str(edge.get("document_id") or ""),
         "evidence": str(edge.get("evidence") or ""),
         "score": round(score, 4),
         "graph_source": "dynamic_graph",

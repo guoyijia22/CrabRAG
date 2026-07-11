@@ -3,6 +3,8 @@ from __future__ import annotations
 from services.rag_api.graph.graph_search import graph_relation_search
 from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings
 from services.rag_api.retrieval.optimizations import apply_query_expansion, apply_rerank, keyword_search_candidates
+from services.rag_api.retrieval.cache import RETRIEVAL_CACHE, retrieval_cache_key
+from services.rag_api.security import current_retrieval_context
 from services.rag_api.vector.chroma_store import search_all_chunks, search_chunks
 
 VALID_TOOLS = {"vector_rule_search", "graph_relation_search_tool", "hybrid_search"}
@@ -72,6 +74,24 @@ def graph_relation_search_tool(query: str, intent: str, entities: list[str]) -> 
 
 
 def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_tool: str, *, allow_query_expansion: bool = True, allow_rerank: bool = True) -> dict:
+    context = current_retrieval_context()
+    cache_key = None
+    if context is not None:
+        cache_key = retrieval_cache_key(
+            context,
+            {
+                "query": query.strip(),
+                "intent": intent,
+                "entities": sorted(entities),
+                "selected_tool": selected_tool,
+                "allow_query_expansion": allow_query_expansion,
+                "allow_rerank": allow_rerank,
+                "rag_settings": load_rag_settings().model_dump(mode="json"),
+            },
+        )
+        cached = RETRIEVAL_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     top_k = get_retrieval_top_k()
     if selected_tool == "vector_rule_search":
         result = vector_rule_search(query, intent, entities, allow_query_expansion=allow_query_expansion, allow_rerank=allow_rerank)
@@ -136,6 +156,12 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
         }
     result["chunks"] = result.get("chunks", [])[:top_k]
     result["relation_paths"] = result.get("relation_paths", [])[:top_k]
+    if cache_key is not None and not result.get("error"):
+        RETRIEVAL_CACHE.set(
+            cache_key,
+            result,
+            {str(chunk.get("document_id")) for chunk in result["chunks"] if chunk.get("document_id")},
+        )
     return result
 
 

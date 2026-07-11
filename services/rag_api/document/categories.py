@@ -40,20 +40,32 @@ def infer_document_category(source_file: str, text: str = "") -> str:
 
 def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, Any]], path: Path | None = None) -> dict[str, Any]:
     doc_categories = {doc["source_file"]: infer_document_category(doc["source_file"], doc.get("content", "")) for doc in documents}
+    document_ids = {
+        doc["source_file"]: str(doc.get("document_id") or doc.get("doc_id") or "")
+        for doc in documents
+    }
     chunk_counter: Counter[str] = Counter()
     source_files: dict[str, set[str]] = defaultdict(set)
     document_counter: Counter[str] = Counter(doc_categories.values())
     keyword_hits: dict[str, list[str]] = defaultdict(list)
+    keyword_hits_by_document: dict[str, dict[str, list[str]]] = defaultdict(dict)
+    chunk_counts_by_document: dict[str, Counter[str]] = defaultdict(Counter)
 
     for doc in documents:
         category = doc_categories[doc["source_file"]]
         source_files[category].add(doc["source_file"])
         keyword_hits[category].extend(_matched_keywords(doc["source_file"], doc.get("content", "")))
+        document_id = document_ids.get(doc["source_file"], "")
+        if document_id:
+            keyword_hits_by_document[category][document_id] = _matched_keywords(doc["source_file"], doc.get("content", ""))
 
     for chunk in chunks:
         meta = chunk.get("metadata", {})
         category = meta.get("category") or doc_categories.get(meta.get("source_file", ""), "合规审核")
         chunk_counter[category] += 1
+        document_id = str(meta.get("document_id") or meta.get("doc_id") or document_ids.get(meta.get("source_file", ""), ""))
+        if document_id:
+            chunk_counts_by_document[category][document_id] += 1
         if meta.get("source_file"):
             source_files[category].add(meta["source_file"])
 
@@ -67,6 +79,16 @@ def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, A
                 "chunk_count": int(chunk_counter.get(name, 0)),
                 "source_files": sorted(source_files.get(name, set())),
                 "keyword_hits": sorted(set(keyword_hits.get(name, []))),
+                "document_sources": sorted(
+                    [
+                        {"document_id": document_ids[source_file], "source_file": source_file}
+                        for source_file in source_files.get(name, set())
+                        if document_ids.get(source_file)
+                    ],
+                    key=lambda item: item["document_id"],
+                ),
+                "chunk_counts_by_document": dict(chunk_counts_by_document.get(name, {})),
+                "keyword_hits_by_document": keyword_hits_by_document.get(name, {}),
             }
         )
 
@@ -82,9 +104,9 @@ def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, A
 
 
 def load_kb_categories() -> dict[str, Any]:
-    from services.rag_api.index_generation import active_artifact_path
+    from services.rag_api.security import pinned_artifact_path
 
-    categories_path = active_artifact_path("categories.json", KB_CATEGORIES_PATH)
+    categories_path = pinned_artifact_path("categories.json", KB_CATEGORIES_PATH)
     if not categories_path.exists():
         return default_categories_payload()
     try:
@@ -94,12 +116,52 @@ def load_kb_categories() -> dict[str, Any]:
     items = payload.get("items")
     if not isinstance(items, list) or not items:
         return default_categories_payload()
+    items = _filter_category_items(items)
     categories = [item.get("name", "") for item in items if item.get("name")]
     return {
         "items": items,
         "categories": categories,
         "generated_at": payload.get("generated_at", ""),
     }
+
+
+def _filter_category_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from services.rag_api.security import current_retrieval_context
+
+    context = current_retrieval_context()
+    if context is None or context.allowed_document_ids is None:
+        return items
+    allowed = context.allowed_document_ids
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        sources = [
+            source
+            for source in item.get("document_sources", []) or []
+            if str(source.get("document_id") or "") in allowed
+        ]
+        if not sources:
+            continue
+        document_ids = {str(source["document_id"]) for source in sources}
+        chunk_counts = item.get("chunk_counts_by_document", {}) or {}
+        keyword_hits = item.get("keyword_hits_by_document", {}) or {}
+        filtered.append(
+            {
+                **item,
+                "document_sources": sources,
+                "source_files": sorted({str(source.get("source_file")) for source in sources if source.get("source_file")}),
+                "document_count": len(document_ids),
+                "chunk_count": sum(int(chunk_counts.get(document_id, 0)) for document_id in document_ids),
+                "keyword_hits": sorted(
+                    {
+                        str(keyword)
+                        for document_id in document_ids
+                        for keyword in keyword_hits.get(document_id, []) or []
+                        if keyword
+                    }
+                ),
+            }
+        )
+    return filtered
 
 
 def default_categories_payload() -> dict[str, Any]:

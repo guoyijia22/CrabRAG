@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 import uuid
 
-from fastapi import FastAPI, Query, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,6 +25,12 @@ from services.rag_api.model_api_settings import public_model_api_settings, updat
 from services.rag_api.rag_settings import RagSettings, load_rag_settings, save_rag_settings
 from services.rag_api.schemas import ChatRequest, ChatResponse, ConfigUpdateRequest, ModelApiSettingsRequest, ModelApiSettingsResponse, SettingsResponse
 from services.rag_api.vector.chroma_store import collection_status
+from services.rag_api.security import (
+    PermissionServiceError,
+    build_retrieval_context,
+    principal_from_headers,
+    use_retrieval_context,
+)
 
 app = FastAPI(title="crabrag-api")
 app.add_middleware(
@@ -45,10 +52,33 @@ def root() -> dict:
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
+    principal, retrieval_context = _request_retrieval_context(http_request)
     session_id = request.session_id or str(uuid.uuid4())
-    state = run_qa({"session_id": session_id, "question": request.question, "history": get_history(session_id), "trace": []})
-    update_memory(session_id, request.question, state.get("answer", ""), state.get("intent", ""), state.get("entities", []))
+    with use_retrieval_context(retrieval_context):
+        state = run_qa(
+            {
+                "session_id": session_id,
+                "question": request.question,
+                "history": get_history(
+                    session_id,
+                    subject=principal.subject,
+                    generation_id=retrieval_context.generation_id,
+                ),
+                "trace": [],
+            }
+        )
+    references = _authorized_references(state.get("references", []), retrieval_context.allowed_document_ids)
+    relation_paths = _authorized_references(state.get("relation_paths", []), retrieval_context.allowed_document_ids)
+    update_memory(
+        session_id,
+        request.question,
+        state.get("answer", ""),
+        state.get("intent", ""),
+        state.get("entities", []),
+        subject=principal.subject,
+        generation_id=retrieval_context.generation_id,
+    )
     append_qa_log(
         {
             "session_id": session_id,
@@ -57,23 +87,34 @@ def chat(request: ChatRequest) -> ChatResponse:
             "question_type": state.get("question_type", ""),
             "retrieval_mode": state.get("retrieval_mode", ""),
             "entities": state.get("entities", []),
-            "sources": [item.get("source_file", "") for item in state.get("references", [])],
+            "sources": [item.get("source_file", "") for item in references],
             "answer": state.get("answer", ""),
             "error": state.get("error"),
         }
     )
     return ChatResponse(
         session_id=session_id,
+        index_generation=retrieval_context.generation_id,
         intent=state.get("intent", ""),
         question_type=state.get("question_type", ""),
         retrieval_mode=state.get("retrieval_mode", ""),
         entities=state.get("entities", []),
         answer=state.get("answer", ""),
-        references=state.get("references", []),
-        relation_paths=state.get("relation_paths", []),
+        references=references,
+        relation_paths=relation_paths,
         trace=state.get("trace", []),
         error=state.get("error"),
     )
+
+
+def _authorized_references(references: list[dict], allowed_document_ids: frozenset[str] | None) -> list[dict]:
+    if allowed_document_ids is None:
+        return references
+    return [
+        item
+        for item in references
+        if str(item.get("document_id") or "") in allowed_document_ids
+    ]
 
 
 @app.post("/api/ingest")
@@ -194,18 +235,38 @@ def update_model_settings(settings: ModelApiSettingsRequest) -> ModelApiSettings
 
 
 @app.get("/api/categories")
-def categories() -> dict:
-    return load_kb_categories()
+def categories(http_request: Request) -> dict:
+    _, retrieval_context = _request_retrieval_context(http_request)
+    with use_retrieval_context(retrieval_context):
+        return load_kb_categories()
 
 
 @app.get("/api/graph")
-def graph_payload() -> dict:
-    return build_graph_payload()
+def graph_payload(http_request: Request) -> dict:
+    _, retrieval_context = _request_retrieval_context(http_request)
+    with use_retrieval_context(retrieval_context):
+        return build_graph_payload()
 
 
 @app.post("/api/graph/subgraph")
-def graph_subgraph(payload: dict) -> dict:
-    return build_subgraph_payload(payload)
+def graph_subgraph(payload: dict, http_request: Request) -> dict:
+    _, retrieval_context = _request_retrieval_context(http_request)
+    allowed = retrieval_context.allowed_document_ids
+    if allowed is not None:
+        payload = {
+            **payload,
+            "relation_paths": _authorized_references(payload.get("relation_paths", []), allowed),
+        }
+    with use_retrieval_context(retrieval_context):
+        return build_subgraph_payload(payload)
+
+
+def _request_retrieval_context(http_request: Request):
+    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    try:
+        return principal, build_retrieval_context(principal)
+    except PermissionServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/graph/schema")

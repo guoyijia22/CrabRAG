@@ -81,3 +81,26 @@ def test_graph_payload_hides_static_graph_when_no_source_files(monkeypatch):
     assert payload["stats"]["source_file_count"] == 0
     assert payload["stats"]["graph_source"] == "empty_graph"
     assert payload["stats"]["graph_source_label"] == "暂无知识图谱"
+
+
+def test_generated_graph_carries_source_document_ids_for_permission_filtering():
+    from services.rag_api.graph.kb_graph_builder import build_kb_graph
+
+    categories = {
+        "items": [
+            {
+                "name": "合规审核",
+                "source_files": ["a.txt"],
+                "document_count": 1,
+                "chunk_count": 1,
+            }
+        ]
+    }
+    documents = [{"document_id": "doc-a", "source_file": "a.txt", "content": "合规审核要求"}]
+    chunks = [{"metadata": {"document_id": "doc-a", "source_file": "a.txt"}}]
+
+    graph = build_kb_graph(categories, documents, chunks)
+
+    assert all(node["document_ids"] == ["doc-a"] for node in graph["nodes"])
+    assert all(node["document_sources"] == [{"document_id": "doc-a", "source_file": "a.txt"}] for node in graph["nodes"])
+    assert all(edge["document_id"] == "doc-a" for edge in graph["edges"])

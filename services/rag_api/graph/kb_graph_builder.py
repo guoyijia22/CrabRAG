@@ -21,6 +21,11 @@ def build_and_save_kb_graph(
 
 def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, Any]:
     document_text = {str(doc.get("source_file") or ""): str(doc.get("content") or "") for doc in documents if doc.get("source_file")}
+    document_ids = {
+        str(doc.get("source_file") or ""): str(doc.get("document_id") or doc.get("doc_id") or "")
+        for doc in documents
+        if doc.get("source_file")
+    }
     chunk_counts = Counter(str(chunk.get("metadata", {}).get("source_file") or "") for chunk in chunks)
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -38,6 +43,12 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                 "type": "知识分类",
                 "category": category,
                 "source_files": source_files,
+                "document_ids": [document_ids[source_file] for source_file in source_files if document_ids.get(source_file)],
+                "document_sources": [
+                    {"document_id": document_ids[source_file], "source_file": source_file}
+                    for source_file in source_files
+                    if document_ids.get(source_file)
+                ],
                 "evidence_count": int(item.get("chunk_count") or 0),
                 "chunk_count": int(item.get("chunk_count") or 0),
                 "document_count": int(item.get("document_count") or len(source_files)),
@@ -53,6 +64,12 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                     "type": "来源文件",
                     "category": category,
                     "source_files": [source_file],
+                    "document_ids": [document_ids[source_file]] if document_ids.get(source_file) else [],
+                    "document_sources": (
+                        [{"document_id": document_ids[source_file], "source_file": source_file}]
+                        if document_ids.get(source_file)
+                        else []
+                    ),
                     "evidence_count": source_chunk_count,
                     "chunk_count": source_chunk_count,
                     "document_count": 1,
@@ -68,6 +85,7 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                     "description": f"{category} 分类包含来源文件 {source_file}",
                     "evidence": source_file,
                     "source_file": source_file,
+                    "document_id": document_ids.get(source_file, ""),
                     "graph_source": "generated_from_kb",
                     "confidence": 0.9,
                 },
@@ -81,6 +99,12 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                         "type": "主题实体",
                         "category": category,
                         "source_files": [source_file],
+                        "document_ids": [document_ids[source_file]] if document_ids.get(source_file) else [],
+                        "document_sources": (
+                            [{"document_id": document_ids[source_file], "source_file": source_file}]
+                            if document_ids.get(source_file)
+                            else []
+                        ),
                         "evidence_count": 1,
                     },
                 )
@@ -94,6 +118,7 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                         "description": f"{source_file} 提及主题 {topic}",
                         "evidence": source_file,
                         "source_file": source_file,
+                        "document_id": document_ids.get(source_file, ""),
                         "graph_source": "generated_from_kb",
                         "confidence": 0.85,
                     },
@@ -108,6 +133,7 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                         "description": f"{topic} 关联到知识分类 {category}",
                         "evidence": source_file,
                         "source_file": source_file,
+                        "document_id": document_ids.get(source_file, ""),
                         "graph_source": "generated_from_kb",
                         "confidence": 0.8,
                     },
@@ -145,8 +171,28 @@ def _merge_node(nodes: dict[str, dict[str, Any]], node: dict[str, Any]) -> None:
     node_id = str(node.get("id") or "").strip()
     if not node_id:
         return
-    existing = nodes.setdefault(node_id, {**node, "source_files": set(node.get("source_files", []) or [])})
+    existing = nodes.setdefault(
+        node_id,
+        {
+            **node,
+            "source_files": set(node.get("source_files", []) or []),
+            "document_ids": set(node.get("document_ids", []) or []),
+            "document_sources": {
+                str(item.get("document_id")): str(item.get("source_file"))
+                for item in node.get("document_sources", []) or []
+                if item.get("document_id")
+            },
+        },
+    )
     existing["source_files"].update(node.get("source_files", []) or [])
+    existing["document_ids"].update(node.get("document_ids", []) or [])
+    existing["document_sources"].update(
+        {
+            str(item.get("document_id")): str(item.get("source_file"))
+            for item in node.get("document_sources", []) or []
+            if item.get("document_id")
+        }
+    )
     existing["evidence_count"] = max(int(existing.get("evidence_count") or 0), int(node.get("evidence_count") or 0))
     existing["chunk_count"] = max(int(existing.get("chunk_count") or 0), int(node.get("chunk_count") or 0))
     existing["document_count"] = max(int(existing.get("document_count") or 0), int(node.get("document_count") or 0))
@@ -161,6 +207,11 @@ def _merge_edge(edges: dict[tuple[str, str, str], dict[str, Any]], edge: dict[st
 def _finalize_node(node: dict[str, Any]) -> dict[str, Any]:
     result = dict(node)
     result["source_files"] = sorted(str(source_file) for source_file in result.get("source_files", []) if source_file)
+    result["document_ids"] = sorted(str(document_id) for document_id in result.get("document_ids", []) if document_id)
+    result["document_sources"] = [
+        {"document_id": document_id, "source_file": source_file}
+        for document_id, source_file in sorted((result.get("document_sources") or {}).items())
+    ]
     if result.get("type") == "主题实体":
         result["evidence_count"] = max(int(result.get("evidence_count") or 0), len(result["source_files"]))
     return result
