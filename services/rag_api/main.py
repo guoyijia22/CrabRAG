@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.rag_api.agent.graph import run_qa
+from services.rag_api import audit
 from services.rag_api.app_settings import AppSettings, SidebarImageUpload, load_app_settings, read_sidebar_image_asset, save_app_settings, save_sidebar_image
 from services.rag_api.config import get_settings, read_app_config, write_system_name
 from services.rag_api.document.categories import load_kb_categories
@@ -149,19 +150,22 @@ def _authorized_references(references: list[dict], allowed_document_ids: frozens
 
 @app.post("/api/ingest")
 def ingest(http_request: Request) -> dict:
-    _require_index_admin(http_request)
+    principal = _require_index_admin(http_request)
+    _append_security_audit("index.ingest_requested", principal=principal, details={"mode": "incremental"})
     return start_ingest_run()
 
 
 @app.post("/api/ingest/run")
 def run_ingest(http_request: Request) -> dict:
-    _require_index_admin(http_request)
+    principal = _require_index_admin(http_request)
+    _append_security_audit("index.ingest_requested", principal=principal, details={"mode": "incremental"})
     return start_ingest_run()
 
 
 @app.post("/api/ingest/full")
 def full_ingest(http_request: Request) -> dict:
-    _require_index_admin(http_request)
+    principal = _require_index_admin(http_request)
+    _append_security_audit("index.ingest_requested", principal=principal, details={"mode": "full"})
     return start_ingest_run(full_rebuild=True)
 
 
@@ -241,9 +245,7 @@ def local_model_capabilities() -> dict:
 
 @app.get("/api/index/status")
 def index_status(http_request: Request) -> dict:
-    principal = _authenticate_principal(http_request)
-    if not principal.can_manage_index:
-        raise HTTPException(status_code=403, detail="index management permission required")
+    _require_index_admin(http_request)
     try:
         state = index_generation.load_index_state()
     except index_generation.IndexStateError as exc:
@@ -262,9 +264,8 @@ def index_status(http_request: Request) -> dict:
 
 @app.post("/api/index/rollback")
 def rollback_index(http_request: Request) -> dict:
-    principal = _authenticate_principal(http_request)
-    if not principal.can_manage_index:
-        raise HTTPException(status_code=403, detail="index management permission required")
+    principal = _require_index_admin(http_request)
+    _append_security_audit("index.rollback_requested", principal=principal)
     try:
         current_state = index_generation.load_index_state()
         previous_generation = str(current_state.get("previous_generation") or "")
@@ -408,31 +409,66 @@ def graph_subgraph(payload: dict, http_request: Request) -> dict:
 
 def _request_retrieval_context(http_request: Request):
     principal = _authenticate_principal(http_request)
+    return principal, _build_retrieval_context(principal)
+
+
+def _build_retrieval_context(principal):
     try:
-        return principal, build_retrieval_context(principal)
+        context = build_retrieval_context(principal)
     except PermissionServiceError as exc:
+        _append_security_audit(
+            "permission.denied",
+            principal=principal,
+            details={"reason": type(exc).__name__},
+        )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    _append_security_audit(
+        "permission.resolved",
+        principal=principal,
+        details={
+            "generation_id": context.generation_id,
+            "allowed_count": len(context.allowed_document_ids) if context.allowed_document_ids is not None else None,
+        },
+    )
+    return context
 
 
 def _require_index_admin(http_request: Request):
     principal = _authenticate_principal(http_request)
     if not principal.can_manage_index:
+        _append_security_audit("authorization.denied", principal=principal, details={"scope": "index_admin"})
         raise HTTPException(status_code=403, detail="需要索引管理权限")
+    _append_security_audit("authorization.granted", principal=principal, details={"scope": "index_admin"})
     return principal
 
 
 def _authenticate_principal(http_request: Request):
     try:
-        return get_identity_provider().authenticate(http_request.headers)
+        principal = get_identity_provider().authenticate(http_request.headers)
     except IdentityAuthenticationError as exc:
+        _append_security_audit("authentication.rejected", details={"reason": type(exc).__name__})
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except IdentityProviderUnavailable as exc:
+        _append_security_audit("authentication.unavailable", details={"reason": type(exc).__name__})
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    _append_security_audit(
+        "authentication.accepted",
+        principal=principal,
+        details={"anonymous": principal.subject == "anonymous"},
+    )
+    return principal
+
+
+def _append_security_audit(event_type: str, **kwargs) -> None:
+    try:
+        audit.SECURITY_AUDIT.append(event_type, **kwargs)
+    except audit.AuditError as exc:
+        raise HTTPException(status_code=503, detail="安全审计不可用，已拒绝操作") from exc
 
 
 def _admin_retrieval_context(http_request: Request):
-    _require_index_admin(http_request)
-    return _request_retrieval_context(http_request)[1]
+    principal = _require_index_admin(http_request)
+    return _build_retrieval_context(principal)
 
 
 def _require_matching_evaluation(payload: dict, permission_fingerprint: str) -> dict:
@@ -455,7 +491,8 @@ def graph_schema_suggestion(http_request: Request) -> dict:
 
 @app.put("/api/graph/schema")
 def update_graph_schema(payload: dict, http_request: Request) -> dict:
-    _require_index_admin(http_request)
+    principal = _require_index_admin(http_request)
+    _append_security_audit("graph_schema.update_requested", principal=principal)
     return save_graph_schema_config(payload)
 
 
@@ -493,8 +530,9 @@ def update_rag_settings(settings: RagSettings) -> RagSettings:
 
 @app.post("/api/evaluations/run")
 def run_evaluations(http_request: Request) -> dict:
-    _, retrieval_context = _request_retrieval_context(http_request)
-    _require_index_admin(http_request)
+    principal = _require_index_admin(http_request)
+    retrieval_context = _build_retrieval_context(principal)
+    _append_security_audit("evaluation.run_requested", principal=principal)
     return start_evaluation_run(retrieval_context)
 
 

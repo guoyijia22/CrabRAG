@@ -250,6 +250,12 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
         {"version": 2, "documents": records, "tombstones": tombstones},
         index_generation.generation_artifact_path(generation_id, "doc_status.json"),
     )
+    from services.rag_api import audit
+
+    audit.SECURITY_AUDIT.append(
+        "index.generation_publish_requested",
+        details={"generation_id": generation_id},
+    )
     index_generation.publish_generation(
         generation_id,
         {

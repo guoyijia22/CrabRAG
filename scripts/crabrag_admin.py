@@ -22,6 +22,8 @@ import zipfile
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 VERSION_PATH = PROJECT_ROOT / "VERSION"
 SOFTWARE_VERSION = VERSION_PATH.read_text(encoding="utf-8").strip() if VERSION_PATH.exists() else "0.0.0"
 BACKUP_FORMAT_VERSION = 1
@@ -55,6 +57,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _append_security_audit(project_root: Path, event_type: str, **kwargs: object) -> None:
+    try:
+        from services.rag_api.audit import AuditError, default_audit_log
+    except ImportError as exc:
+        raise BackupError(f"security audit is unavailable: {exc}") from exc
+    try:
+        default_audit_log(project_root).append(event_type, **kwargs)
+    except AuditError as exc:
+        raise BackupError(f"security audit write failed: {exc}") from exc
+
+
 def rotate_internal_token(
     project_root: Path,
     *,
@@ -65,6 +78,12 @@ def rotate_internal_token(
     if grace_seconds < 0:
         raise BackupError("token grace period must be non-negative")
     root = project_root.resolve()
+    _append_security_audit(
+        root,
+        "internal_token.rotation_requested",
+        subject="local-admin",
+        details={"grace_seconds": grace_seconds},
+    )
     config_dir = root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     env_path = config_dir / ".env"
@@ -443,6 +462,7 @@ def _create_private_archive_file(path: Path) -> bool:
 
 def create_backup(project_root: Path, output: Path) -> dict[str, object]:
     root = project_root.resolve()
+    _append_security_audit(root, "backup.requested", subject="local-admin")
     destination = output.expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_dir():
@@ -925,6 +945,12 @@ def restore_backup(
         _validate_restore_boundaries(root)
         if not assume_yes and confirm("Restore will replace CrabRAG configuration and index state. Continue? [y/N] ").strip().lower() not in {"y", "yes"}:
             raise BackupError("restore cancelled")
+        _append_security_audit(
+            root,
+            "restore.requested",
+            subject="local-admin",
+            details={"archive_version": manifest.get("software_version")},
+        )
 
         root.mkdir(parents=True, exist_ok=True)
         transaction = Path(temporary_dir) / "transaction"
@@ -970,6 +996,17 @@ def restore_backup(
         return {"manifest": manifest, "restored_files": len(manifest["files"])}
 
 
+def verify_security_audit(project_root: Path = PROJECT_ROOT) -> dict[str, object]:
+    try:
+        from services.rag_api.audit import AuditError, default_audit_log
+    except ImportError as exc:
+        raise BackupError(f"security audit is unavailable: {exc}") from exc
+    try:
+        return default_audit_log(project_root.resolve()).verify()
+    except AuditError as exc:
+        raise BackupError(f"security audit verification failed: {exc}") from exc
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CrabRAG administration commands")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -983,6 +1020,7 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("stop", help="stop processes recorded for this CrabRAG project")
     rotate_parser = subparsers.add_parser("rotate-token", help="rotate the trusted gateway internal token")
     rotate_parser.add_argument("--grace-seconds", type=int, default=300)
+    subparsers.add_parser("audit-verify", help="verify the append-only security audit chain")
     return parser
 
 
@@ -1014,6 +1052,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "rotate-token":
             payload = rotate_internal_token(PROJECT_ROOT, grace_seconds=args.grace_seconds)
             print(json.dumps(payload, ensure_ascii=False))
+            return EXIT_OK
+        if args.command == "audit-verify":
+            print(json.dumps(verify_security_audit(PROJECT_ROOT), ensure_ascii=False))
             return EXIT_OK
         result = restore_backup(PROJECT_ROOT, args.archive, assume_yes=args.assume_yes)
         print(json.dumps({"status": "ok", **result}, ensure_ascii=False))

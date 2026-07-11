@@ -797,3 +797,21 @@ def test_rotate_internal_token_is_atomic_and_never_returns_secret(tmp_path):
     assert "old-secret" not in str(result)
     assert "new-secret" not in str(result)
     assert result["previous_active"] is True
+    audit_text = (root / "data" / "audit" / "security-audit.jsonl").read_text(encoding="utf-8")
+    assert "internal_token.rotation_requested" in audit_text
+    assert "old-secret" not in audit_text
+    assert "new-secret" not in audit_text
+
+
+def test_verify_security_audit_reports_tampering(tmp_path):
+    from scripts import crabrag_admin
+    from services.rag_api.audit import default_audit_log
+
+    root = tmp_path / "CrabRAG"
+    audit = default_audit_log(root)
+    audit.append("event")
+
+    assert crabrag_admin.verify_security_audit(root)["record_count"] == 1
+    audit.path.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(crabrag_admin.BackupError, match="audit verification failed"):
+        crabrag_admin.verify_security_audit(root)
