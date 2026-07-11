@@ -243,6 +243,42 @@ def test_ingest_failure_keeps_previous_generation_active(tmp_path, monkeypatch):
     assert index_generation.load_index_state()["active_generation"] == "gen-stable"
 
 
+def test_ingest_rejects_missing_knowledge_base_configuration_before_staging(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.document import ingest
+    from services.rag_api.exceptions import DocumentLoadError
+
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    settings = _settings(tmp_path / "unused-docs", tmp_path).model_copy(update={"docs_dirs": []})
+    monkeypatch.setattr(ingest, "get_settings", lambda: settings)
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    _capture_generation_builds(ingest, monkeypatch)
+
+    with pytest.raises(DocumentLoadError):
+        ingest.ingest_knowledge_base()
+
+    assert not index_generation.ACTIVE_INDEX_PATH.exists()
+    assert not index_generation.GENERATIONS_DIR.exists()
+
+
+def test_ingest_rejects_nonexistent_configured_directory_without_creating_it(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.document import ingest
+    from services.rag_api.exceptions import DocumentLoadError
+
+    missing_docs = tmp_path / "missing-docs"
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(missing_docs, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    _capture_generation_builds(ingest, monkeypatch)
+
+    with pytest.raises(DocumentLoadError):
+        ingest.ingest_knowledge_base()
+
+    assert not missing_docs.exists()
+    assert not index_generation.ACTIVE_INDEX_PATH.exists()
+
+
 def test_incremental_ingest_removes_deleted_documents_from_vectors_and_graph(tmp_path, monkeypatch):
     from services.rag_api.document import ingest
 
@@ -344,6 +380,69 @@ def test_version_replacement_records_previous_version_tombstone(tmp_path, monkey
     document_path.write_text("版本二", encoding="utf-8")
 
     result = ingest.ingest_knowledge_base()
+    generation_manifest = index_generation.load_generation_manifest(result["generation_id"])
+
+    assert any(
+        item["document_version"] == "1" and item["reason"] == "version_replaced"
+        for item in generation_manifest["tombstones"]
+    )
+
+
+def test_full_rebuild_records_removed_document_tombstone(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.document import ingest
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.txt").write_text("保留内容", encoding="utf-8")
+    removed_path = docs_dir / "b.txt"
+    removed_path.write_text("待删除内容", encoding="utf-8")
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    _capture_generation_builds(ingest, monkeypatch)
+
+    first = ingest.ingest_knowledge_base()
+    first_manifest = index_generation.load_generation_manifest(first["generation_id"])
+    removed_id = next(
+        document_id
+        for document_id, record in first_manifest["documents"].items()
+        if record["source_file"] == "b.txt"
+    )
+    removed_path.unlink()
+
+    second = ingest.ingest_knowledge_base(full_rebuild=True)
+    second_manifest = index_generation.load_generation_manifest(second["generation_id"])
+
+    assert second["removed_document_count"] == 1
+    assert any(
+        item["document_id"] == removed_id and item["reason"] == "source_removed_or_retired"
+        for item in second_manifest["tombstones"]
+    )
+
+
+def test_full_rebuild_records_replaced_version_tombstone(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.document import ingest
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    document_path = docs_dir / "policy.txt"
+    document_path.write_text("版本一", encoding="utf-8")
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    _capture_generation_builds(ingest, monkeypatch)
+
+    ingest.ingest_knowledge_base()
+    manifest_path = docs_dir / ".crabrag-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["documents"][0]["version"] = "2"
+    manifest["documents"][0]["updated_at"] = "2026-07-11T00:00:00Z"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    document_path.write_text("版本二", encoding="utf-8")
+
+    result = ingest.ingest_knowledge_base(full_rebuild=True)
     generation_manifest = index_generation.load_generation_manifest(result["generation_id"])
 
     assert any(
@@ -460,6 +559,72 @@ def test_multi_vector_chunks_have_content_hashes_for_their_own_text():
         expected_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         assert chunk["metadata"]["chunk_hash"] == expected_hash
         assert chunk["metadata"]["chunk_id"] == chunk["id"]
+
+
+def test_multi_vector_child_ids_do_not_depend_on_parent_chunk_id():
+    from services.rag_api.document.multi_vector import expand_multi_vector_chunks
+
+    before = {
+        "id": "doc-a::chunk::old-parent::001",
+        "content": "保持不变。\n旧尾段内容。",
+        "metadata": {"document_id": "doc-a", "chunk_hash": "old-parent"},
+    }
+    after = {
+        "id": "doc-a::chunk::new-parent::001",
+        "content": "新增开头内容。\n保持不变。\n旧尾段内容。",
+        "metadata": {"document_id": "doc-a", "chunk_hash": "new-parent"},
+    }
+
+    before_chunks = expand_multi_vector_chunks([before], RagSettings(multi_vector_enabled=True))
+    after_chunks = expand_multi_vector_chunks([after], RagSettings(multi_vector_enabled=True))
+
+    for granularity in ("paragraph", "sentence"):
+        before_id = next(
+            chunk["id"] for chunk in before_chunks
+            if chunk["metadata"]["granularity"] == granularity and chunk["content"] == "保持不变。"
+        )
+        after_id = next(
+            chunk["id"] for chunk in after_chunks
+            if chunk["metadata"]["granularity"] == granularity and chunk["content"] == "保持不变。"
+        )
+        assert before_id == after_id
+
+
+def test_multi_vector_duplicate_ordinals_are_scoped_to_document_and_granularity():
+    from services.rag_api.document.multi_vector import expand_multi_vector_chunks
+
+    bases = [
+        {
+            "id": f"doc-a::chunk::parent-{index}::001",
+            "content": "重复内容。",
+            "metadata": {"document_id": "doc-a", "chunk_hash": f"parent-{index}"},
+        }
+        for index in (1, 2)
+    ]
+
+    chunks = expand_multi_vector_chunks(bases, RagSettings(multi_vector_enabled=True))
+    paragraph_ids = [
+        chunk["id"] for chunk in chunks
+        if chunk["metadata"]["granularity"] == "paragraph"
+    ]
+
+    assert len(paragraph_ids) == 2
+    assert paragraph_ids[0].startswith("doc-a::paragraph::")
+    assert paragraph_ids[0].endswith("::001")
+    assert paragraph_ids[1].endswith("::002")
+
+
+def test_pipeline_fingerprint_includes_chunk_identity_schema_version(tmp_path, monkeypatch):
+    from services.rag_api.document import doc_status
+
+    settings = _settings(tmp_path / "docs", tmp_path)
+    rag_settings = RagSettings(chunk_size=200, chunk_overlap=20, multi_vector_enabled=True)
+    first = doc_status.pipeline_fingerprint(settings, rag_settings)
+
+    monkeypatch.setattr(doc_status, "CHUNK_IDENTITY_SCHEMA_VERSION", 999, raising=False)
+    second = doc_status.pipeline_fingerprint(settings, rag_settings)
+
+    assert first != second
 
 
 def test_tombstones_are_retained_for_thirty_days():

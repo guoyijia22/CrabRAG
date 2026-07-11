@@ -10,15 +10,18 @@ def expand_multi_vector_chunks(chunks: list[dict], settings: RagSettings) -> lis
     if not settings.multi_vector_enabled:
         return chunks
     expanded: list[dict] = []
+    occurrences_by_document: dict[str, dict[tuple[str, str], int]] = {}
     for chunk in chunks:
         parent_id = chunk["id"]
         base_meta = {**chunk["metadata"], "parent_chunk_id": parent_id}
-        occurrences: dict[tuple[str, str], int] = {}
-        expanded.append(_expanded_chunk(parent_id, chunk["content"], "document", base_meta, occurrences))
+        document_id = str(base_meta.get("document_id") or base_meta.get("doc_id") or "")
+        identity_prefix = document_id or parent_id
+        occurrences = occurrences_by_document.setdefault(identity_prefix, {})
+        expanded.append(_expanded_chunk(identity_prefix, chunk["content"], "document", base_meta, occurrences))
         for index, paragraph in enumerate(_paragraphs(chunk["content"])):
-            expanded.append(_expanded_chunk(parent_id, paragraph, "paragraph", {**base_meta, "paragraph_index": index}, occurrences))
+            expanded.append(_expanded_chunk(identity_prefix, paragraph, "paragraph", {**base_meta, "paragraph_index": index}, occurrences))
         for index, sentence in enumerate(_sentences(chunk["content"])):
-            expanded.append(_expanded_chunk(parent_id, sentence, "sentence", {**base_meta, "sentence_index": index}, occurrences))
+            expanded.append(_expanded_chunk(identity_prefix, sentence, "sentence", {**base_meta, "sentence_index": index}, occurrences))
     return expanded
 
 
@@ -32,7 +35,7 @@ def _sentences(text: str) -> list[str]:
 
 
 def _expanded_chunk(
-    parent_id: str,
+    identity_prefix: str,
     content: str,
     granularity: str,
     metadata: dict,
@@ -43,7 +46,7 @@ def _expanded_chunk(
     occurrence_key = (granularity, chunk_hash)
     occurrence = occurrences.get(occurrence_key, 0) + 1
     occurrences[occurrence_key] = occurrence
-    chunk_id = f"{parent_id}::{granularity}::{chunk_hash[:20]}::{occurrence:03d}"
+    chunk_id = f"{identity_prefix}::{granularity}::{chunk_hash[:20]}::{occurrence:03d}"
     return {
         "id": chunk_id,
         "content": content,

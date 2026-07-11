@@ -8,6 +8,7 @@ from services.rag_api.agent.tools import dispatch_retrieval, tool_to_mode
 from services.rag_api.document.categories import get_category_names
 from services.rag_api.llm.siliconflow_client import chat_completion  # noqa: F401
 from services.rag_api.rag_settings import RagSettings, load_rag_settings, override_rag_settings
+from services.rag_api.security import PrincipalContext, build_retrieval_context, current_retrieval_context, use_retrieval_context
 
 EvidenceMode = Literal["auto", "vector", "graph", "hybrid"]
 
@@ -30,6 +31,33 @@ EVIDENCE_KEYS = [
 
 
 def retrieve_evidence(
+    question: str,
+    *,
+    top_k: int | None = None,
+    mode: EvidenceMode = "auto",
+    include_trace: bool = False,
+    no_rerank: bool = False,
+) -> dict[str, Any]:
+    if current_retrieval_context() is not None:
+        return _retrieve_evidence(
+            question,
+            top_k=top_k,
+            mode=mode,
+            include_trace=include_trace,
+            no_rerank=no_rerank,
+        )
+    context = build_retrieval_context(PrincipalContext.anonymous())
+    with use_retrieval_context(context):
+        return _retrieve_evidence(
+            question,
+            top_k=top_k,
+            mode=mode,
+            include_trace=include_trace,
+            no_rerank=no_rerank,
+        )
+
+
+def _retrieve_evidence(
     question: str,
     *,
     top_k: int | None = None,

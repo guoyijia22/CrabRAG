@@ -1694,25 +1694,25 @@ configRoute.put("/config", async (c) => {
 // server/bun_api/routes/evaluations.ts
 var evaluationsRoute = new Hono2;
 evaluationsRoute.post("/evaluations/run", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/run`, { method: "POST" });
+  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/run`, { method: "POST", headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 evaluationsRoute.get("/evaluations", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations`);
+  const res = await fetch(`${RAG_BASE_URL}/api/evaluations`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 evaluationsRoute.get("/evaluations/active", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/active`);
+  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/active`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 evaluationsRoute.get("/evaluations/:runId/progress", async (c) => {
   const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}/progress`);
+  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 evaluationsRoute.get("/evaluations/:runId", async (c) => {
   const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}`);
+  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 
@@ -1775,29 +1775,29 @@ indexRoute.post("/index/rollback", async (c) => {
 // server/bun_api/routes/ingest.ts
 var ingestRoute = new Hono2;
 ingestRoute.post("/ingest", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest`, { method: "POST" });
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest`, { method: "POST", headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 ingestRoute.post("/ingest/run", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/run`, { method: "POST" });
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest/run`, { method: "POST", headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 ingestRoute.post("/ingest/full", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/full`, { method: "POST" });
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest/full`, { method: "POST", headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 ingestRoute.get("/ingest/active", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/active`);
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest/active`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 ingestRoute.get("/ingest/:runId/progress", async (c) => {
   const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}/progress`);
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 ingestRoute.get("/ingest/:runId", async (c) => {
   const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}`);
+  const res = await fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 
@@ -1806,7 +1806,7 @@ var logsRoute = new Hono2;
 logsRoute.get("/logs", async (c) => {
   const url = new URL(c.req.url);
   const qs = url.search;
-  const res = await fetch(`${RAG_BASE_URL}/api/logs${qs}`);
+  const res = await fetch(`${RAG_BASE_URL}/api/logs${qs}`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 

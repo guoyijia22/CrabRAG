@@ -11,6 +11,7 @@ from services.rag_api.rag_settings import RagSettings
 
 DOC_STATUS_PATH = PROJECT_DIR / "data" / "ingest" / "doc_status.json"
 DOC_SNAPSHOT_DIR = PROJECT_DIR / "data" / "ingest" / "doc_snapshots"
+CHUNK_IDENTITY_SCHEMA_VERSION = 2
 
 PROCESSED = "PROCESSED"
 DUPLICATE = "DUPLICATE"
@@ -63,6 +64,7 @@ def hash_content(content: str) -> str:
 
 def pipeline_fingerprint(settings: Settings, rag_settings: RagSettings) -> str:
     payload = {
+        "chunk_identity_schema_version": CHUNK_IDENTITY_SCHEMA_VERSION,
         "chunk_size": rag_settings.chunk_size,
         "chunk_overlap": rag_settings.chunk_overlap,
         "multi_vector_enabled": rag_settings.multi_vector_enabled,

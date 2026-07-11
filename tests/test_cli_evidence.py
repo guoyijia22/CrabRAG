@@ -95,6 +95,67 @@ def test_retrieve_evidence_no_rerank_flag_disables_rerank(monkeypatch):
     assert captured["allow_rerank"] is False
 
 
+def test_retrieve_evidence_defaults_to_anonymous_public_only_context(monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.retrieval import evidence_service
+    from services.rag_api.security import current_retrieval_context
+
+    captured = {}
+    monkeypatch.setattr(index_generation, "active_generation_id", lambda: "gen-1")
+    monkeypatch.setattr(
+        index_generation,
+        "load_generation_manifest",
+        lambda generation_id: {
+            "documents": {
+                "public-doc": {"acl": {"visibility": "public", "revision": "1"}},
+                "restricted-doc": {"acl": {"visibility": "restricted", "roles": ["sales"], "revision": "1"}},
+            }
+        },
+    )
+    monkeypatch.setattr(evidence_service, "get_category_names", lambda: ["资费咨询"])
+    monkeypatch.setattr(evidence_service, "check_business_scope", lambda question, categories: {"in_scope": True, "matched_entities": []})
+    monkeypatch.setattr(evidence_service, "load_rag_settings", lambda: RagSettings(top_k=1))
+
+    def dispatch(*args, **kwargs):
+        captured["context"] = current_retrieval_context()
+        return {"mode": "vector", "chunks": [], "relation_paths": [], "error": None, "trace": []}
+
+    monkeypatch.setattr(evidence_service, "dispatch_retrieval", dispatch)
+
+    evidence_service.retrieve_evidence("资费是多少？")
+
+    context = captured["context"]
+    assert context.principal.subject == "anonymous"
+    assert context.allowed_document_ids == frozenset({"public-doc"})
+
+
+def test_retrieve_evidence_preserves_existing_trusted_context(monkeypatch):
+    from services.rag_api.retrieval import evidence_service
+    from services.rag_api.security import PrincipalContext, RetrievalContext, current_retrieval_context, use_retrieval_context
+
+    trusted = RetrievalContext(
+        generation_id="gen-1",
+        principal=PrincipalContext(subject="u-1", roles=("sales",), groups=(), permission_revision="2"),
+        allowed_document_ids=frozenset({"public-doc", "restricted-doc"}),
+        permission_fingerprint="permission-2",
+    )
+    captured = {}
+    monkeypatch.setattr(evidence_service, "get_category_names", lambda: ["资费咨询"])
+    monkeypatch.setattr(evidence_service, "check_business_scope", lambda question, categories: {"in_scope": True, "matched_entities": []})
+    monkeypatch.setattr(evidence_service, "load_rag_settings", lambda: RagSettings(top_k=1))
+
+    def dispatch(*args, **kwargs):
+        captured["context"] = current_retrieval_context()
+        return {"mode": "vector", "chunks": [], "relation_paths": [], "error": None, "trace": []}
+
+    monkeypatch.setattr(evidence_service, "dispatch_retrieval", dispatch)
+
+    with use_retrieval_context(trusted):
+        evidence_service.retrieve_evidence("资费是多少？")
+
+    assert captured["context"] is trusted
+
+
 def test_cli_outputs_json_to_stdout(monkeypatch, capsys):
     from services.rag_api.cli import evidence as evidence_cli
 

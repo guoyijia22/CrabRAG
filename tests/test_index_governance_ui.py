@@ -14,6 +14,28 @@ def test_gateway_injects_configured_identity_and_proxies_index_governance_routes
     assert 'app.route("/api", indexRoute)' in gateway
 
 
+def test_gateway_forwards_trusted_identity_to_all_admin_routes():
+    gateway = (ROOT / "server" / "gateway.js").read_text(encoding="utf-8")
+
+    expected_calls = [
+        'fetch(`${RAG_BASE_URL}/api/evaluations/run`, { method: "POST", headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/evaluations`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/evaluations/active`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/ingest`, { method: "POST", headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/ingest/run`, { method: "POST", headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/ingest/full`, { method: "POST", headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/ingest/active`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/logs${qs}`, { headers: ragHeaders() })',
+    ]
+
+    for expected in expected_calls:
+        assert expected in gateway
+
+
 def test_start_scripts_generate_shared_internal_token_when_missing():
     powershell = (ROOT / "run.ps1").read_text(encoding="utf-8")
     shell = (ROOT / "run.sh").read_text(encoding="utf-8")

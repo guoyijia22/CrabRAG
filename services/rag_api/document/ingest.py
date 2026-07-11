@@ -15,6 +15,7 @@ from services.rag_api.document.loader import load_document, scan_supported_files
 from services.rag_api.document.manifest import load_active_catalog
 from services.rag_api.document.multi_vector import expand_multi_vector_chunks
 from services.rag_api.document.splitter import split_documents
+from services.rag_api.exceptions import DOC_LOAD_ERROR_MESSAGE, DocumentLoadError
 from services.rag_api.graph.kb_graph_builder import build_and_save_kb_graph
 from services.rag_api.graph.schema_config import generate_graph_schema_suggestion
 from services.rag_api.graph.graph_vector_store import index_graph_vectors_generation
@@ -45,6 +46,8 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     settings = get_settings()
     rag_settings = load_rag_settings()
     docs_dirs = [path.resolve() for path in getattr(settings, "docs_dirs", [settings.docs_dir])]
+    if not docs_dirs or any(not path.is_dir() for path in docs_dirs):
+        raise DocumentLoadError(DOC_LOAD_ERROR_MESSAGE)
     progress(1, "扫描文档", "正在扫描并读取知识库目录")
     scanned_files = scan_supported_files(docs_dirs)
     build_cutoff = datetime.now(timezone.utc)
@@ -69,14 +72,13 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     removed_count = 0
     duplicate_count = 0
     failed_count = 0
-    records = dict(manifest.get("documents", {}))
-
-    if full_rebuild:
-        records = {}
+    previous_records = dict(manifest.get("documents", {}))
+    records = {} if full_rebuild else dict(previous_records)
 
     tombstones = _retained_tombstones(manifest.get("tombstones", []), build_cutoff)
-    for removed_doc_id in sorted(set(records) - current_doc_ids):
-        previous = records.pop(removed_doc_id)
+    for removed_doc_id in sorted(set(previous_records) - current_doc_ids):
+        previous = previous_records[removed_doc_id]
+        records.pop(removed_doc_id, None)
         tombstones.append(
             {
                 "document_id": removed_doc_id,
@@ -96,7 +98,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
         governance = active_documents[path]
         doc_id = str(governance["document_id"])
         manifest_revision = _manifest_revision(governance)
-        previous = records.get(doc_id)
+        previous = previous_records.get(doc_id)
         if previous and str(previous.get("document_version") or "") != str(governance["version"]):
             tombstones.append(
                 {
@@ -107,7 +109,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 }
             )
         file_hash = file_hashes[path]
-        if _can_reuse_snapshot(previous, file_hash, fingerprint, manifest_revision):
+        if not full_rebuild and _can_reuse_snapshot(previous, file_hash, fingerprint, manifest_revision):
             snapshot = doc_status.load_snapshot(doc_id, source_snapshot_dir)
             if snapshot:
                 document, chunks = _snapshot_payload(snapshot)
