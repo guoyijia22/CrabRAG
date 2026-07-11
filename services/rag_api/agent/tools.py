@@ -197,7 +197,7 @@ def _candidate_count(settings, top_k: int) -> int:
 def _merge_chunks(chunks: list[dict], top_k: int) -> list[dict]:
     deduped: dict[str, dict] = {}
     for chunk in chunks:
-        key = f"{chunk.get('source_file')}::{chunk.get('content', '')[:120]}"
+        key = _chunk_identity(chunk)
         if key not in deduped or chunk.get("score", 0) > deduped[key].get("score", 0):
             deduped[key] = chunk
     return sorted(deduped.values(), key=lambda item: item.get("score", 0), reverse=True)[:top_k]
@@ -212,7 +212,7 @@ def _round_robin_merge_chunk_streams(streams: list[tuple[str, list[dict]]], top_
             if index >= len(chunks):
                 continue
             chunk = chunks[index]
-            key = f"{chunk.get('source_file')}::{chunk.get('content', '')[:120]}"
+            key = _chunk_identity(chunk)
             if key in seen:
                 continue
             seen.add(key)
@@ -220,3 +220,13 @@ def _round_robin_merge_chunk_streams(streams: list[tuple[str, list[dict]]], top_
             if len(merged) >= top_k:
                 return merged
     return merged
+
+
+def _chunk_identity(chunk: dict) -> str:
+    chunk_id = str(chunk.get("chunk_id") or "")
+    if chunk_id:
+        return f"chunk:{chunk_id}"
+    chunk_hash = str(chunk.get("chunk_hash") or "")
+    if chunk_hash:
+        return f"hash:{chunk.get('document_id', '')}:{chunk.get('granularity', '')}:{chunk_hash}"
+    return f"content:{chunk.get('source_file', '')}:{chunk.get('content', '')}"

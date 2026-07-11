@@ -194,3 +194,18 @@ def test_hybrid_candidate_count_uses_setting_without_param_gate(monkeypatch):
 
     assert captured["limit"] == 9
     assert [chunk["content"] for chunk in result["chunks"]] == ["vector-1", "keyword-1"]
+
+
+def test_chunk_dedup_uses_stable_identity_instead_of_content_prefix():
+    from services.rag_api.agent import tools
+
+    shared_prefix = "x" * 120
+    chunks = [
+        {"chunk_id": "chunk-a", "source_file": "same.md", "content": f"{shared_prefix}A", "score": 0.9},
+        {"chunk_id": "chunk-b", "source_file": "same.md", "content": f"{shared_prefix}B", "score": 0.8},
+        {"chunk_id": "chunk-a", "source_file": "same.md", "content": "duplicate channel", "score": 0.7},
+    ]
+
+    merged = tools._round_robin_merge_chunk_streams([("vector", chunks)], top_k=3)
+
+    assert [chunk["chunk_id"] for chunk in merged] == ["chunk-a", "chunk-b"]
