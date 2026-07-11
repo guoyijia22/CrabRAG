@@ -16,6 +16,7 @@ ENV_EXAMPLE="$ROOT/config/.env.example"
 ENV_FILE="$ROOT/config/.env"
 PORTABLE_BUN="$ROOT/runtime/bun/bun"
 PORTABLE_BUN_DIR="$ROOT/runtime/bun"
+PACKAGE_JSON="$ROOT/package.json"
 BUN_VERSION="1.3.14"
 BUN_RELEASE_BASE_URL="https://github.com/oven-sh/bun/releases/download/bun-v1.3.14"
 BUN_LINUX_X64_SHA256="951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f"
@@ -196,11 +197,15 @@ done
 
 log "Installing JavaScript dependencies with Bun."
 cd "$ROOT"
-# Equivalent command: bun install
-if [[ -f "$ROOT/bun.lock" ]]; then
-  "$BUN_BIN" install --frozen-lockfile
+if [[ -f "$PACKAGE_JSON" ]]; then
+  # Equivalent command: bun install
+  if [[ -f "$ROOT/bun.lock" ]]; then
+    "$BUN_BIN" install --frozen-lockfile
+  else
+    "$BUN_BIN" install
+  fi
 else
-  "$BUN_BIN" install
+  log "Skipping JavaScript dependency install because this release uses the bundled gateway."
 fi
 
 log "Running smoke check."

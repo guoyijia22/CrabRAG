@@ -66,7 +66,6 @@ def main() -> int:
     for relative_path in [
         "config/.env",
         "requirements.txt",
-        "package.json",
         "server/gateway.js",
         "apps/web/dist/index.html",
     ]:

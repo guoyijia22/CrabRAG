@@ -132,6 +132,39 @@ runtime/bun/bun install
 
 Windows 下使用 `runtime\bun\bun.exe install`。
 
+源码仓库会保留 `tests/` 回归测试。Windows 用户发布包不会包含测试、React/TypeScript 源码、网关 TypeScript 源码、缓存、本地配置、用户数据、API Key 或本地模型。
+
+从源码重建 Web 与网关，或执行完整检查：
+
+```bash
+bun run build
+bun run check
+```
+
+## 诊断、备份与恢复
+
+执行跨平台安装诊断（退出码 `0` 表示健康、`1` 表示存在告警、`2` 表示存在错误）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py doctor --json
+```
+
+创建和恢复带校验的备份：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py backup --output .\backup.zip
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py restore --archive .\backup.zip --yes
+```
+
+备份包含本地配置、Chroma、索引 generation 和应用状态。外部知识库文件不会进入备份，只记录规范化后的目录路径。恢复前必须停止 CrabRAG；恢复会先检查格式、软件兼容性、路径边界和每个文件的 SHA-256，全部通过后才替换本地状态。
+备份可能包含明文 API 凭据，因此命令会在 manifest 和输出中明确告警，并在操作系统支持时设置为仅所有者可访问。请像保管 API Key 一样安全保管备份 ZIP。
+
+生成 Windows x64 发布包及 SHA-256 文件：
+
+```powershell
+.\scripts\build_release.ps1 -Version 1.1.0 -OutputDir .\release
+```
+
 如果需要从干净虚拟环境重新安装，可以删除 `.venv` 后重新执行安装脚本：
 
 ```powershell

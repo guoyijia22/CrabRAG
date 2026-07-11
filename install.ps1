@@ -35,6 +35,7 @@ $EnvExample = Join-Path $Root "config\.env.example"
 $EnvPath = Join-Path $Root "config\.env"
 $PortableBun = Join-Path $Root "runtime\bun\bun.exe"
 $PortableBunDir = Join-Path $Root "runtime\bun"
+$PackageJson = Join-Path $Root "package.json"
 $BunVersion = "1.3.14"
 $BunWindowsX64Sha256 = "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922"
 
@@ -223,15 +224,19 @@ foreach ($optional in @("node", "npm", "pnpm")) {
 
 Push-Location $Root
 try {
-    Write-Step "Installing JavaScript dependencies with Bun."
-    # Equivalent command: bun install
-    if (Test-Path (Join-Path $Root "bun.lock")) {
-        & $bun install --frozen-lockfile
+    if (Test-Path -LiteralPath $PackageJson) {
+        Write-Step "Installing JavaScript dependencies with Bun."
+        # Equivalent command: bun install
+        if (Test-Path (Join-Path $Root "bun.lock")) {
+            & $bun install --frozen-lockfile
+        } else {
+            & $bun install
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Fail "bun install failed."
+        }
     } else {
-        & $bun install
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Fail "bun install failed."
+        Write-Step "Skipping JavaScript dependency install because this release uses the bundled gateway."
     }
 } finally {
     Pop-Location

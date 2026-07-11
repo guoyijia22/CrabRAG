@@ -132,6 +132,39 @@ runtime/bun/bun install
 
 On Windows, use `runtime\bun\bun.exe install`.
 
+The source repository keeps regression tests under `tests/`. Tests, TypeScript/React source, gateway TypeScript source, caches, local configuration, user data, API keys, and local models are excluded from Windows release packages.
+
+Rebuild the web UI and gateway from source, or run the complete verification pipeline:
+
+```bash
+bun run build
+bun run check
+```
+
+## Administration, backup, and restore
+
+Run the cross-platform installation diagnosis (exit code `0` means healthy, `1` means warnings, and `2` means errors):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py doctor --json
+```
+
+Create and restore a verified backup:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py backup --output .\backup.zip
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py restore --archive .\backup.zip --yes
+```
+
+Backups include local configuration, Chroma, index generations, and application state. External knowledge-base files are never copied; only their normalized directory paths are recorded. Stop CrabRAG before restore. Restore validates the format, software compatibility, paths, and every SHA-256 checksum before changing local state.
+Because a backup can contain plaintext API credentials, the command marks this in its manifest and output and applies owner-only file permissions where the operating system supports them. Store backup ZIP files as securely as API keys.
+
+Build the Windows x64 release and its SHA-256 file:
+
+```powershell
+.\scripts\build_release.ps1 -Version 1.1.0 -OutputDir .\release
+```
+
 To rebuild from a clean virtual environment, delete `.venv` and rerun the installer:
 
 ```powershell

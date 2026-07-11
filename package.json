@@ -11,7 +11,8 @@
     "test:python": "bun scripts/run-pytest.mjs",
     "test": "bun run test:web && bun run test:gateway",
     "check:generated": "git diff --exit-code -- apps/web/dist server/gateway.js",
-    "check": "bun run build && bun run typecheck:web && bun run test && bun run test:python && bun run check:generated"
+    "check": "bun run build && bun run typecheck:web && bun run test && bun run test:python && bun run check:generated",
+    "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_release.ps1"
   },
   "dependencies": {
     "hono": "4.12.29",
