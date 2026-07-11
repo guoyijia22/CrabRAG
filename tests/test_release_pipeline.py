@@ -36,6 +36,7 @@ def _minimal_release_tree(root: Path) -> None:
         "scripts/check_env.py": "print('check')",
         "scripts/stop.ps1": "Write-Host stop",
         "config/.env.example": "CRABRAG_API_KEY=\n",
+        "config/evaluation-dataset.example.json": '{"schema_version": 1, "dataset_id": "example", "dataset_version": "1", "cases": [{"id": "q1", "question": "example"}]}',
         "skills/crabrag-rag/SKILL.md": "skill",
     }
     for name, content in files.items():
@@ -76,6 +77,7 @@ def test_release_builder_includes_runtime_files_and_excludes_development_and_use
     assert "CrabRAG/apps/web/dist/index.html" in names
     assert "CrabRAG/server/gateway.js" in names
     assert "CrabRAG/config/.env.example" in names
+    assert "CrabRAG/config/evaluation-dataset.example.json" in names
     assert "CrabRAG/scripts/check_env.py" in names
     assert "CrabRAG/scripts/stop.ps1" in names
     assert "CrabRAG/package.json" in names

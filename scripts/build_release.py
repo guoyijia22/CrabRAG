@@ -37,6 +37,7 @@ REQUIRED_FILES = (
     "scripts/check_env.py",
     "scripts/stop.ps1",
     "config/.env.example",
+    "config/evaluation-dataset.example.json",
 )
 INCLUDED_DIRECTORIES = (
     "services",
