@@ -23,7 +23,7 @@ from services.rag_api.evaluation.questions import generate_evaluation_question_s
 from services.rag_api.evaluation.scoring import attach_baseline_deltas, build_overall_summary, score_case, score_profile
 from services.rag_api.evaluation import storage
 from services.rag_api.llm.call_metrics import capture_model_calls
-from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, override_rag_settings
+from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, override_rag_settings, resolve_retrieval_top_k
 from services.rag_api.vector.chroma_store import add_chunks, collection_status, override_collection_name
 from services.rag_api import index_generation
 from services.rag_api.security import (
@@ -192,7 +192,8 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
             error = str(exc)
     model_call_snapshot = model_calls.snapshot()
     latency_ms = int((time.perf_counter() - started) * 1000)
-    top_k = get_retrieval_top_k(profile["settings"])
+    evaluated_query = result.get("effective_question") or question["question"]
+    top_k = int(resolve_retrieval_top_k(evaluated_query, profile["settings"])["effective_top_k"])
     references = result.get("references", [])[:top_k]
     case = {
         "question_id": question["id"],
@@ -261,7 +262,8 @@ def _run_local_retrieval_case(state: dict, profile: dict) -> dict:
         allow_query_expansion=False,
         allow_rerank=bool(getattr(profile["settings"], "rerank_enabled", False)),
     )
-    top_k = get_retrieval_top_k(profile["settings"])
+    top_k_decision = resolve_retrieval_top_k(effective_question, profile["settings"])
+    top_k = int(top_k_decision["effective_top_k"])
     references = retrieval.get("chunks", [])[:top_k]
     trace.extend(retrieval.get("trace", []))
     trace.append(
@@ -273,7 +275,7 @@ def _run_local_retrieval_case(state: dict, profile: dict) -> dict:
     trace.append(
         {
             "node": "retrieve",
-            "output": {"top_k": top_k, "mode": retrieval.get("mode", ""), "sources": [chunk.get("source_file", "") for chunk in references]},
+            "output": {**top_k_decision, "top_k": top_k, "mode": retrieval.get("mode", ""), "sources": [chunk.get("source_file", "") for chunk in references]},
         }
     )
     trace.append({"node": "generate_answer", "output": {"skipped": True, "reason": "local_evaluation_retrieval_only"}})

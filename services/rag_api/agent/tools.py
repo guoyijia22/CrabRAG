@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from services.rag_api.graph.graph_search import graph_relation_search
 from services.rag_api.exceptions import IndexCollectionUnavailable
-from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings
+from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, resolve_retrieval_top_k
 from services.rag_api.retrieval.optimizations import apply_query_expansion, apply_rerank, keyword_search_candidates
 from services.rag_api.retrieval.cache import RETRIEVAL_CACHE, retrieval_cache_key
 from services.rag_api.security import current_retrieval_context
@@ -21,7 +21,7 @@ def vector_rule_search(
     allow_keyword_search: bool = True,
 ) -> dict:
     rag_settings = load_rag_settings()
-    top_k = get_retrieval_top_k(rag_settings)
+    top_k = int(resolve_retrieval_top_k(query, rag_settings)["effective_top_k"])
     trace: list[dict] = []
     try:
         if allow_query_expansion:
@@ -62,7 +62,8 @@ def vector_rule_search(
 
 
 def graph_relation_search_tool(query: str, intent: str, entities: list[str]) -> dict:
-    top_k = get_retrieval_top_k()
+    rag_settings = load_rag_settings()
+    top_k = int(resolve_retrieval_top_k(query, rag_settings)["effective_top_k"])
     try:
         result = graph_relation_search(query, intent, top_k=top_k)
         return {
@@ -97,7 +98,9 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
         cached = RETRIEVAL_CACHE.get(cache_key)
         if cached is not None:
             return cached
-    top_k = get_retrieval_top_k()
+    rag_settings = load_rag_settings()
+    top_k_decision = resolve_retrieval_top_k(query, rag_settings)
+    top_k = int(top_k_decision["effective_top_k"])
     if selected_tool == "vector_rule_search":
         result = vector_rule_search(query, intent, entities, allow_query_expansion=allow_query_expansion, allow_rerank=allow_rerank)
     elif selected_tool == "graph_relation_search_tool":
@@ -121,7 +124,6 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
         except IndexCollectionUnavailable as exc:
             collection_errors.append(str(exc))
             vector_result = {"mode": "vector", "chunks": [], "relation_paths": [], "error": str(exc), "trace": []}
-        rag_settings = load_rag_settings()
         candidate_k = _candidate_count(rag_settings, top_k)
         keyword_error = None
         try:
@@ -175,6 +177,7 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
             "error": collection_error or graph_result["error"] or vector_result["error"],
             "trace": trace,
         }
+    result["trace"] = [{"node": "dynamic_top_k", "output": top_k_decision}] + list(result.get("trace", []))
     result["chunks"] = result.get("chunks", [])[:top_k]
     result["relation_paths"] = result.get("relation_paths", [])[:top_k]
     if cache_key is not None and not result.get("error"):

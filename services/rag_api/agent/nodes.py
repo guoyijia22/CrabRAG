@@ -21,7 +21,7 @@ from services.rag_api.document.categories import get_category_names
 from services.rag_api.exceptions import LLM_ERROR_MESSAGE, LLMServiceError, NO_MATCH_MESSAGE
 from services.rag_api.graph.graph_search import extract_entities
 from services.rag_api.llm.siliconflow_client import chat_completion
-from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings
+from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, resolve_retrieval_top_k
 from services.rag_api.retrieval.context_budget import apply_context_token_budget
 from services.rag_api.retrieval.optimizations import rewrite_query_with_context
 
@@ -119,23 +119,26 @@ def choose_retrieval_tool_node(state: QAState) -> QAState:
 
 
 def retrieve_node(state: QAState) -> QAState:
-    top_k = get_retrieval_top_k()
+    rag_settings = load_rag_settings()
+    query = state.get("effective_question", state["question"])
+    top_k_decision = resolve_retrieval_top_k(query, rag_settings)
+    top_k = int(top_k_decision["effective_top_k"])
     if not state.get("business_scope", {}).get("in_scope", True):
-        trace = state.get("trace", []) + [{"node": "retrieve", "output": {"top_k": top_k, "mode": "none", "sources": []}}]
+        trace = state.get("trace", []) + [{"node": "retrieve", "output": {**top_k_decision, "top_k": top_k, "mode": "none", "sources": []}}]
         return {**state, "retrieved_chunks": [], "relation_paths": [], "references": [], "trace": trace, "error": None}
     selected_tool = state.get("selected_tool") or _heuristic_tool_choice(state)[0]
-    query = state.get("effective_question", state["question"])
     result = dispatch_retrieval(query, state["intent"], state.get("entities", []), selected_tool)
     chunks = result.get("chunks", [])[:top_k]
     trace = state.get("trace", []) + result.get("trace", [])
-    trace.append({"node": "retrieve", "output": {"top_k": top_k, "mode": result.get("mode", ""), "sources": [chunk.get("source_file", "") for chunk in chunks]}})
+    trace.append({"node": "retrieve", "output": {**top_k_decision, "top_k": top_k, "mode": result.get("mode", ""), "sources": [chunk.get("source_file", "") for chunk in chunks]}})
     return {**state, "retrieved_chunks": chunks, "relation_paths": result.get("relation_paths", [])[:top_k], "references": chunks, "trace": trace, "error": result.get("error")}
 
 
 def generate_answer_node(state: QAState) -> QAState:
     app_settings = load_app_settings()
     rag_settings = load_rag_settings()
-    top_k = get_retrieval_top_k(rag_settings)
+    query = state.get("effective_question", state["question"])
+    top_k = int(resolve_retrieval_top_k(query, rag_settings)["effective_top_k"])
     if not state.get("business_scope", {}).get("in_scope", True):
         trace = state.get("trace", []) + [{"node": "generate_answer", "output": {"has_references": False, "response_type": "out_of_scope"}}]
         return {**state, "answer": app_settings.out_of_scope_response, "references": [], "trace": trace, "error": None}
@@ -219,7 +222,9 @@ def _answer_has_reference_section(answer: str, language: str) -> bool:
 def _format_answer_from_chunks(state: QAState, answer: str, language: str | None = None) -> str:
     question = state.get("effective_question") or state.get("question") or ""
     active_language = language or (detect_prompt_language(question) if question else "zh")
-    chunks = state.get("retrieved_chunks", [])[:get_retrieval_top_k()]
+    settings = load_rag_settings()
+    top_k = int(resolve_retrieval_top_k(question, settings)["effective_top_k"])
+    chunks = state.get("retrieved_chunks", [])[:top_k]
     if active_language == "en":
         refs = "\n".join(
             f"- [{i}] {chunk.get('source_file', '')}"

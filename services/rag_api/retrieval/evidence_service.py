@@ -7,7 +7,7 @@ from services.rag_api.agent.heuristics import heuristic_classify, heuristic_tool
 from services.rag_api.agent.tools import dispatch_retrieval, tool_to_mode
 from services.rag_api.document.categories import get_category_names
 from services.rag_api.llm.siliconflow_client import chat_completion  # noqa: F401
-from services.rag_api.rag_settings import RagSettings, load_rag_settings, override_rag_settings
+from services.rag_api.rag_settings import RagSettings, load_rag_settings, override_rag_settings, resolve_retrieval_top_k
 from services.rag_api.security import PrincipalContext, build_retrieval_context, current_retrieval_context, use_retrieval_context
 
 EvidenceMode = Literal["auto", "vector", "graph", "hybrid"]
@@ -70,7 +70,8 @@ def _retrieve_evidence(
         raise ValueError("question must not be empty")
 
     rag_settings = _settings_with_top_k(load_rag_settings(), top_k)
-    top_k_value = rag_settings.top_k
+    top_k_decision = resolve_retrieval_top_k(effective_question, rag_settings)
+    top_k_value = int(top_k_decision["effective_top_k"])
     categories = get_category_names()
     trace: list[dict[str, Any]] = [
         {"node": "rag_settings", "output": rag_settings.model_dump()},
@@ -122,7 +123,7 @@ def _retrieve_evidence(
     chunks = result.get("chunks", [])[:top_k_value]
     relation_paths = result.get("relation_paths", [])[:top_k_value]
     trace.extend(result.get("trace", []))
-    trace.append({"node": "retrieve", "output": {"top_k": top_k_value, "mode": result.get("mode", ""), "sources": [chunk.get("source_file", "") for chunk in chunks]}})
+    trace.append({"node": "retrieve", "output": {**top_k_decision, "top_k": top_k_value, "mode": result.get("mode", ""), "sources": [chunk.get("source_file", "") for chunk in chunks]}})
 
     error = result.get("error")
     if error and not chunks and not relation_paths:

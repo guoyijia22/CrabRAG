@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -22,6 +23,7 @@ class RagSettings(BaseModel):
     query_expansion_enabled: bool = False
     rerank_enabled: bool = False
     context_rewrite_enabled: bool = False
+    dynamic_top_k_enabled: bool = False
     rag_param_tuning_enabled: bool = False
     chunk_size: int = Field(default=600, ge=200, le=1200)
     chunk_overlap: int = Field(default=100, ge=0, le=300)
@@ -60,6 +62,40 @@ def reset_rag_settings() -> RagSettings:
 def get_retrieval_top_k(settings: RagSettings | None = None) -> int:
     active = settings or load_rag_settings()
     return active.top_k
+
+
+def resolve_retrieval_top_k(query: str, settings: RagSettings) -> dict[str, int | bool | str]:
+    base_top_k = max(1, min(10, int(settings.top_k)))
+    if not settings.dynamic_top_k_enabled:
+        return {
+            "enabled": False,
+            "base_top_k": base_top_k,
+            "effective_top_k": base_top_k,
+            "increase": 0,
+            "reason": "disabled",
+        }
+
+    normalized = re.sub(r"\s+", "", query or "")
+    reasons: list[str] = []
+    if len(normalized) >= 36:
+        reasons.append("long_query")
+    clause_signals = re.findall(r"以及|同时|分别|并且|并|和|、|，|；|;", normalized)
+    if len(clause_signals) >= 2:
+        reasons.append("multiple_clauses")
+    requirement_signals = re.findall(r"哪些|如何|为什么|是否|多少|步骤|条件|影响|区别|关系|时限|材料|审核|资费", normalized)
+    if len(requirement_signals) >= 3:
+        reasons.append("multiple_requirements")
+
+    requested_increase = min(2, len(reasons))
+    effective_top_k = min(10, base_top_k + requested_increase)
+    increase = effective_top_k - base_top_k
+    return {
+        "enabled": True,
+        "base_top_k": base_top_k,
+        "effective_top_k": effective_top_k,
+        "increase": increase,
+        "reason": "+".join(reasons) if reasons else "simple_query",
+    }
 
 
 @contextmanager
