@@ -83,6 +83,7 @@ export interface RagSettings {
   query_expansion_enabled: boolean;
   rerank_enabled: boolean;
   context_rewrite_enabled: boolean;
+  dynamic_top_k_enabled: boolean;
   rag_param_tuning_enabled: boolean;
   chunk_size: number;
   chunk_overlap: number;

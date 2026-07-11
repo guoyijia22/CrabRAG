@@ -43,6 +43,7 @@ const defaultRagSettings: RagSettings = {
   query_expansion_enabled: false,
   rerank_enabled: false,
   context_rewrite_enabled: false,
+  dynamic_top_k_enabled: false,
   rag_param_tuning_enabled: false,
   chunk_size: 600,
   chunk_overlap: 100,
@@ -187,6 +188,7 @@ function RagConfiguration({ value, language, onChange }: { value: RagSettings; l
         <Toggle label={language === "zh" ? "查询扩展" : "Query expansion"} checked={value.query_expansion_enabled} onChange={(checked) => toggle("query_expansion_enabled", checked)} />
         <Toggle label={language === "zh" ? "统一重排" : "Unified rerank"} checked={value.rerank_enabled} onChange={(checked) => toggle("rerank_enabled", checked)} />
         <Toggle label={language === "zh" ? "多轮追问重写" : "Multi-turn follow-up rewrite"} checked={value.context_rewrite_enabled} onChange={(checked) => toggle("context_rewrite_enabled", checked)} />
+        <Toggle label={language === "zh" ? "动态 Top-K" : "Dynamic Top-K"} checked={value.dynamic_top_k_enabled} onChange={(checked) => toggle("dynamic_top_k_enabled", checked)} />
         <Toggle label={language === "zh" ? "参数调优" : "Parameter tuning"} checked={value.rag_param_tuning_enabled} onChange={(checked) => toggle("rag_param_tuning_enabled", checked)} />
       </div>
       <div className="field-grid three">
