@@ -8,6 +8,7 @@ from chromadb.utils.batch_utils import create_batches
 
 from services.rag_api.config import PROJECT_DIR, get_settings
 from services.rag_api.document import doc_status
+from services.rag_api.exceptions import IndexCollectionUnavailable
 from services.rag_api import index_generation
 from services.rag_api.security import current_retrieval_context
 from services.rag_api.llm.siliconflow_client import embed_texts
@@ -278,7 +279,18 @@ def _search_collection(collection_name: str, query: str, top_k: int) -> list[dic
     if allowed_document_ids is not None and not allowed_document_ids:
         return []
     client = _get_chroma_client()
-    collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+    governed_read = (
+        context is not None and context.generation_id != "legacy"
+    ) or (
+        context is None and bool(index_generation.active_generation_id())
+    )
+    try:
+        if governed_read:
+            collection = client.get_collection(name=collection_name)
+        else:
+            collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+    except Exception as exc:  # noqa: BLE001
+        raise IndexCollectionUnavailable(f"活动索引集合不可用：{collection_name}") from exc
     if collection.count() == 0:
         return []
     query_embedding = embed_texts([query])[0]

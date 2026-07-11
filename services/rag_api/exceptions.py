@@ -13,3 +13,7 @@ class LLMServiceError(Exception):
 
 class RetrievalError(Exception):
     pass
+
+
+class IndexCollectionUnavailable(RetrievalError):
+    pass

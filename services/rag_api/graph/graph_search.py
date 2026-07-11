@@ -11,6 +11,7 @@ from services.rag_api.graph.graph_vector_store import search_graph_entities, sea
 from services.rag_api.graph.graph_store import KB_GRAPH_PATH as DEFAULT_KB_GRAPH_PATH
 from services.rag_api.graph.graph_store import load_raw_graph
 from services.rag_api.graph.query_keywords import split_graph_query_keywords
+from services.rag_api.exceptions import IndexCollectionUnavailable
 from services.rag_api.graph.relations import RELATIONS
 from services.rag_api.llm.siliconflow_client import chat_completion
 from services.rag_api.security import current_retrieval_context, filter_graph_by_permission
@@ -260,6 +261,8 @@ def _dynamic_graph_vector_search(
         relationship_query = " ".join(keyword_info.get("relationship_keywords") or [query])
         entity_hits = search_graph_entities(entity_query, top_k=candidate_k)
         relationship_hits = search_graph_relationships(relationship_query, top_k=candidate_k)
+    except IndexCollectionUnavailable:
+        raise
     except Exception as exc:  # noqa: BLE001
         entity_hits = []
         relationship_hits = []

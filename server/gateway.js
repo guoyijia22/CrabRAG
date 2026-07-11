@@ -1732,18 +1732,18 @@ graphRoute.post("/graph/subgraph", async (c) => {
   return c.json(await res.json(), res.status);
 });
 graphRoute.get("/graph/schema", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/graph/schema`);
+  const res = await fetch(`${RAG_BASE_URL}/api/graph/schema`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 graphRoute.get("/graph/schema/suggestion", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/graph/schema/suggestion`);
+  const res = await fetch(`${RAG_BASE_URL}/api/graph/schema/suggestion`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 graphRoute.put("/graph/schema", async (c) => {
   const body = await c.req.json();
   const res = await fetch(`${RAG_BASE_URL}/api/graph/schema`, {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: ragHeaders(true),
     body: JSON.stringify(body)
   });
   return c.json(await res.json(), res.status);

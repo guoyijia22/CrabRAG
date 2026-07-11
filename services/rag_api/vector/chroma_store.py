@@ -13,6 +13,7 @@ from chromadb.utils.batch_utils import create_batches
 
 from services.rag_api.config import get_settings
 from services.rag_api.document.categories import source_files_for_category
+from services.rag_api.exceptions import IndexCollectionUnavailable
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.rag_settings import load_rag_settings
 from services.rag_api import index_generation
@@ -27,7 +28,13 @@ LAST_CLEANUP_STATUS: dict[str, Any] = {"deleted_generations": [], "errors": [], 
 
 def get_collection():
     client = _get_chroma_client()
-    return client.get_or_create_collection(name=_collection_name(), metadata={"hnsw:space": "cosine"})
+    collection_name = _collection_name()
+    if _COLLECTION_OVERRIDE.get() or not _governed_collection_read():
+        return client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+    try:
+        return client.get_collection(name=collection_name)
+    except Exception as exc:  # noqa: BLE001
+        raise IndexCollectionUnavailable(f"活动索引集合不可用：{collection_name}") from exc
 
 
 def reset_collection(collection_metadata: dict[str, Any] | None = None):
@@ -309,6 +316,13 @@ def _collection_name() -> str:
     context = current_retrieval_context()
     generation_id = context.generation_id if context and context.generation_id != "legacy" else index_generation.active_generation_id()
     return index_generation.generation_collection_name(base, generation_id, "text") if generation_id else base
+
+
+def _governed_collection_read() -> bool:
+    context = current_retrieval_context()
+    if context is not None:
+        return context.generation_id != "legacy"
+    return bool(index_generation.active_generation_id())
 
 
 def _reusable_source_names(base_collection_name: str) -> list[str]:

@@ -376,17 +376,20 @@ def _require_matching_evaluation(payload: dict, permission_fingerprint: str) -> 
 
 
 @app.get("/api/graph/schema")
-def graph_schema() -> dict:
+def graph_schema(http_request: Request) -> dict:
+    _require_index_admin(http_request)
     return load_graph_schema()
 
 
 @app.get("/api/graph/schema/suggestion")
-def graph_schema_suggestion() -> dict:
+def graph_schema_suggestion(http_request: Request) -> dict:
+    _require_index_admin(http_request)
     return load_graph_schema_suggestion()
 
 
 @app.put("/api/graph/schema")
-def update_graph_schema(payload: dict) -> dict:
+def update_graph_schema(payload: dict, http_request: Request) -> dict:
+    _require_index_admin(http_request)
     return save_graph_schema_config(payload)
 
 

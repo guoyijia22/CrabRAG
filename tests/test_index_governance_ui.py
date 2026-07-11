@@ -30,6 +30,9 @@ def test_gateway_forwards_trusted_identity_to_all_admin_routes():
         'fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() })',
         'fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}`, { headers: ragHeaders() })',
         'fetch(`${RAG_BASE_URL}/api/logs${qs}`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/graph/schema`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/graph/schema/suggestion`, { headers: ragHeaders() })',
+        'fetch(`${RAG_BASE_URL}/api/graph/schema`, {\n    method: "PUT",\n    headers: ragHeaders(true),',
     ]
 
     for expected in expected_calls:

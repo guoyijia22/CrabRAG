@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 def test_permission_provider_filters_public_and_role_documents():
     from services.rag_api.security import LocalPermissionProvider, PrincipalContext
@@ -189,7 +191,7 @@ def test_graph_vector_search_applies_same_document_filter(monkeypatch):
             return {"documents": [["entity"]], "metadatas": [[{"id": "entity", "document_id": "doc-a"}]], "distances": [[0.1]]}
 
     class Client:
-        def get_or_create_collection(self, name, metadata=None):
+        def get_collection(self, name):
             return Collection()
 
     monkeypatch.setattr(graph_vector_store, "_get_chroma_client", lambda: Client())
@@ -517,3 +519,130 @@ def test_categories_endpoint_runs_inside_trusted_retrieval_context(monkeypatch):
     )
 
     assert response.json() == {"generation": "gen-2", "allowed": ["doc-a"]}
+
+
+def test_graph_schema_endpoints_require_trusted_admin(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from services.rag_api import main
+
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN", "trusted")
+    monkeypatch.setattr(main, "load_graph_schema", lambda: {"kind": "schema"})
+    monkeypatch.setattr(main, "load_graph_schema_suggestion", lambda: {"kind": "suggestion"})
+    monkeypatch.setattr(main, "save_graph_schema_config", lambda payload: {"kind": "saved", **payload})
+    client = TestClient(main.app)
+
+    requests = [
+        ("get", "/api/graph/schema", None),
+        ("get", "/api/graph/schema/suggestion", None),
+        ("put", "/api/graph/schema", {"version": 1}),
+    ]
+    for method, path, payload in requests:
+        response = getattr(client, method)(path, json=payload) if payload is not None else getattr(client, method)(path)
+        assert response.status_code == 403
+
+    admin_headers = {
+        "x-crabrag-internal-token": "trusted",
+        "x-crabrag-subject": "admin",
+        "x-crabrag-admin": "true",
+    }
+    for method, path, payload in requests:
+        response = (
+            getattr(client, method)(path, headers=admin_headers, json=payload)
+            if payload is not None
+            else getattr(client, method)(path, headers=admin_headers)
+        )
+        assert response.status_code == 200
+
+
+def test_governed_text_collection_read_never_creates_missing_collection(monkeypatch):
+    from services.rag_api import exceptions
+    from services.rag_api.vector import chroma_store
+
+    calls = {"get": 0, "create": 0}
+
+    class Client:
+        def get_collection(self, name):
+            calls["get"] += 1
+            raise KeyError(name)
+
+        def get_or_create_collection(self, name, metadata=None):
+            calls["create"] += 1
+            return object()
+
+    monkeypatch.setattr(chroma_store, "_get_chroma_client", lambda: Client())
+    monkeypatch.setattr(chroma_store, "get_settings", lambda: type("Settings", (), {"collection_name": "kb"})())
+    monkeypatch.setattr(chroma_store.index_generation, "active_generation_id", lambda: "gen-1")
+    error_type = getattr(exceptions, "IndexCollectionUnavailable", RuntimeError)
+
+    with pytest.raises(error_type, match="kb__text__gen-1"):
+        chroma_store.get_collection()
+
+    assert calls == {"get": 1, "create": 0}
+
+
+def test_legacy_text_collection_read_can_initialize_collection(monkeypatch):
+    from services.rag_api.vector import chroma_store
+
+    expected = object()
+    calls = {"create": 0}
+
+    class Client:
+        def get_or_create_collection(self, name, metadata=None):
+            calls["create"] += 1
+            return expected
+
+    monkeypatch.setattr(chroma_store, "_get_chroma_client", lambda: Client())
+    monkeypatch.setattr(chroma_store, "get_settings", lambda: type("Settings", (), {"collection_name": "kb"})())
+    monkeypatch.setattr(chroma_store.index_generation, "active_generation_id", lambda: None)
+
+    assert chroma_store.get_collection() is expected
+    assert calls["create"] == 1
+
+
+def test_governed_graph_collection_read_never_creates_missing_collection(monkeypatch):
+    from services.rag_api import exceptions
+    from services.rag_api.graph import graph_vector_store
+
+    calls = {"get": 0, "create": 0}
+
+    class Client:
+        def get_collection(self, name):
+            calls["get"] += 1
+            raise KeyError(name)
+
+        def get_or_create_collection(self, name, metadata=None):
+            calls["create"] += 1
+            return type("Collection", (), {"count": lambda self: 0})()
+
+    monkeypatch.setattr(graph_vector_store, "_get_chroma_client", lambda: Client())
+    monkeypatch.setattr(graph_vector_store, "get_settings", lambda: type("Settings", (), {"collection_name": "kb"})())
+    monkeypatch.setattr(graph_vector_store.index_generation, "active_generation_id", lambda: "gen-1")
+    error_type = getattr(exceptions, "IndexCollectionUnavailable", RuntimeError)
+
+    with pytest.raises(error_type, match="kb__graph_entity__gen-1"):
+        graph_vector_store.search_graph_entities("query", top_k=1)
+
+    assert calls == {"get": 1, "create": 0}
+
+
+def test_graph_collection_failure_is_not_hidden_by_literal_fallback(monkeypatch):
+    from services.rag_api import exceptions
+    from services.rag_api.graph import graph_search
+
+    error_type = getattr(exceptions, "IndexCollectionUnavailable", RuntimeError)
+
+    def fail(*args, **kwargs):
+        raise error_type("missing graph collection")
+
+    monkeypatch.setattr(graph_search, "search_graph_entities", fail)
+
+    with pytest.raises(error_type, match="missing graph collection"):
+        graph_search._dynamic_graph_vector_search(
+            "query",
+            "intent",
+            [{"id": "a"}, {"id": "b"}],
+            [{"source": "a", "target": "b", "label": "rel"}],
+            {"entity_keywords": ["a"], "relationship_keywords": ["rel"]},
+            1,
+        )
