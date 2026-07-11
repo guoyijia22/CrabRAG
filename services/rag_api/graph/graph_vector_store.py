@@ -13,6 +13,7 @@ from services.rag_api.security import current_retrieval_context
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.vector.chroma_store import EMBEDDING_BATCH_SIZE
 from services.rag_api.vector.chroma_store import _get_chroma_client
+from services.rag_api.vector.embedding_reuse import iter_matching_embeddings
 
 ENTITY_SUFFIX = "_graph_entities"
 RELATIONSHIP_SUFFIX = "_graph_relationships"
@@ -138,37 +139,71 @@ def _build_generation_collection(
         pass
     collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
     embedding_fingerprint = doc_status.embedding_fingerprint(get_settings())
-    reusable = {} if full_rebuild else _load_generation_embeddings(client, kind, embedding_fingerprint)
-    missing: list[dict[str, Any]] = []
-    embeddings_by_id: dict[str, list[float]] = {}
+    pending_by_hash: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         record["metadata"] = {**record["metadata"], "embedding_fingerprint": embedding_fingerprint}
         record_hash = _record_hash(record)
         record["metadata"] = {**record["metadata"], "record_hash": record_hash, "generation_id": generation_id}
-        embedding = reusable.get(record_hash)
-        if embedding is None:
-            missing.append(record)
-        else:
-            embeddings_by_id[record["id"]] = embedding
-    if missing:
-        for record, embedding in zip(missing, _embed_documents([record["document"] for record in missing])):
-            embeddings_by_id[record["id"]] = embedding
-    if records:
-        for batch_ids, batch_embeddings, batch_metadatas, batch_documents in create_batches(
-            client,
-            ids=[record["id"] for record in records],
-            embeddings=[embeddings_by_id[record["id"]] for record in records],
-            metadatas=[record["metadata"] for record in records],
-            documents=[record["document"] for record in records],
-        ):
-            collection.upsert(ids=batch_ids, documents=batch_documents, embeddings=batch_embeddings, metadatas=batch_metadatas)
+        pending_by_hash.setdefault(record_hash, []).append(record)
+
+    write_ids: list[str] = []
+    write_documents: list[str] = []
+    write_embeddings: list[list[float]] = []
+    write_metadatas: list[dict[str, Any]] = []
+    write_batch_size = max(1, min(512, int(client.get_max_batch_size())))
+
+    def flush() -> None:
+        if not write_ids:
+            return
+        collection.upsert(
+            ids=list(write_ids),
+            documents=list(write_documents),
+            embeddings=list(write_embeddings),
+            metadatas=list(write_metadatas),
+        )
+        write_ids.clear()
+        write_documents.clear()
+        write_embeddings.clear()
+        write_metadatas.clear()
+
+    def queue(group: list[dict[str, Any]], embedding: list[float]) -> None:
+        for record in group:
+            write_ids.append(str(record["id"]))
+            write_documents.append(str(record["document"]))
+            write_embeddings.append(list(embedding))
+            write_metadatas.append(record["metadata"])
+            if len(write_ids) >= write_batch_size:
+                flush()
+
+    source_names = [] if full_rebuild else _generation_source_names(kind)
+
+    def reusable_key(document: str, metadata: dict[str, Any]) -> str | None:
+        if str(metadata.get("embedding_fingerprint") or "") != embedding_fingerprint:
+            return None
+        return str(metadata.get("record_hash") or _record_hash({"document": document, "metadata": metadata}))
+
+    for record_hash, embedding in iter_matching_embeddings(
+        client,
+        source_names,
+        set(pending_by_hash),
+        reusable_key,
+    ):
+        queue(pending_by_hash.pop(str(record_hash)), embedding)
+
+    missing_groups = list(pending_by_hash.values())
+    for start in range(0, len(missing_groups), EMBEDDING_BATCH_SIZE):
+        groups = missing_groups[start : start + EMBEDDING_BATCH_SIZE]
+        generated = embed_texts([group[0]["document"] for group in groups])
+        for group, embedding in zip(groups, generated):
+            queue(group, embedding)
+    flush()
     if collection.count() != len(records):
         raise RuntimeError(f"图谱索引代写入数量不一致：expected={len(records)}, actual={collection.count()}")
-    return {"reused": len(records) - len(missing), "embedded": len(missing)}
+    embedded_record_count = sum(len(group) for group in missing_groups)
+    return {"reused": len(records) - embedded_record_count, "embedded": embedded_record_count}
 
 
-def _load_generation_embeddings(client, kind: str, embedding_fingerprint: str) -> dict[str, list[float]]:
-    reusable: dict[str, list[float]] = {}
+def _generation_source_names(kind: str) -> list[str]:
     state = index_generation.load_index_state()
     generation_ids = [
         str(value)
@@ -176,31 +211,13 @@ def _load_generation_embeddings(client, kind: str, embedding_fingerprint: str) -
         if value
     ]
     if generation_ids:
-        source_names = [
+        return [
             index_generation.generation_collection_name(_base_collection_name(), generation_id, kind)
             for generation_id in generation_ids
         ]
-    elif kind == "graph_entity":
-        source_names = [f"{_base_collection_name()}{ENTITY_SUFFIX}"]
-    else:
-        source_names = [f"{_base_collection_name()}{RELATIONSHIP_SUFFIX}"]
-    for source_name in source_names:
-        try:
-            source = client.get_or_create_collection(name=source_name, metadata={"hnsw:space": "cosine"})
-            result = source.get(include=["documents", "metadatas", "embeddings"])
-        except Exception:
-            continue
-        documents = result.get("documents") or []
-        metadatas = result.get("metadatas") or []
-        raw_embeddings = result.get("embeddings")
-        embeddings = list(raw_embeddings) if raw_embeddings is not None else []
-        for document, metadata, embedding in zip(documents, metadatas, embeddings):
-            metadata = metadata or {}
-            if str(metadata.get("embedding_fingerprint") or "") != embedding_fingerprint:
-                continue
-            record_hash = str(metadata.get("record_hash") or _record_hash({"document": document, "metadata": metadata}))
-            reusable.setdefault(record_hash, [float(value) for value in embedding])
-    return reusable
+    if kind == "graph_entity":
+        return [f"{_base_collection_name()}{ENTITY_SUFFIX}"]
+    return [f"{_base_collection_name()}{RELATIONSHIP_SUFFIX}"]
 
 
 def _sync_collection(collection_name: str, records: list[dict[str, Any]], previous: dict[str, Any]) -> dict[str, str]:

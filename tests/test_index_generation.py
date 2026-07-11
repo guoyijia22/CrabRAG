@@ -136,6 +136,52 @@ def test_build_generation_does_not_reuse_unknown_fingerprint_and_embeds_duplicat
     assert embedded_batches == [["same"]]
 
 
+def test_build_generation_pages_reusable_embeddings_instead_of_loading_all(tmp_path, monkeypatch):
+    from services.rag_api.vector import chroma_store
+
+    index_generation = _configure_generation_paths(tmp_path, monkeypatch)
+    fake_client = _FakeClient()
+    settings = type("Settings", (), {"collection_name": "kb", "embedding_provider": "api", "chroma_dir": tmp_path / "chroma"})()
+    monkeypatch.setattr(chroma_store, "_get_chroma_client", lambda: fake_client)
+    monkeypatch.setattr(chroma_store, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        chroma_store,
+        "embed_texts",
+        lambda texts: (_ for _ in ()).throw(AssertionError("matching embedding must be reused")),
+    )
+    index_generation.publish_generation("gen-1", {"permission_schema_version": 1})
+    source = fake_client.get_or_create_collection("kb__text__gen-1")
+    source.upsert(
+        ids=[f"old-{index}" for index in range(600)],
+        documents=[f"content-{index}" for index in range(600)],
+        embeddings=[[float(index), 1.0] for index in range(600)],
+        metadatas=[
+            {
+                "chunk_hash": f"hash-{index}",
+                "granularity": "chunk",
+                "embedding_fingerprint": "embed-v1",
+            }
+            for index in range(600)
+        ],
+    )
+    chunks = [
+        {
+            "id": "new-599",
+            "content": "content-599",
+            "metadata": {
+                "chunk_hash": "hash-599",
+                "granularity": "chunk",
+                "embedding_fingerprint": "embed-v1",
+            },
+        }
+    ]
+
+    stats = chroma_store.build_generation_chunks(chunks, "gen-2")
+
+    assert stats["reused_embedding_count"] == 1
+    assert source.get_calls == [(512, 0), (512, 512)]
+
+
 def test_add_chunks_resets_empty_collection_and_preserves_build_metadata(monkeypatch):
     from services.rag_api.vector import chroma_store
 
@@ -181,6 +227,8 @@ def test_graph_generation_reuses_unchanged_entity_and_relationship_embeddings(tm
     assert stats["graph_reused_embedding_count"] == 2
     assert stats["graph_embedded_record_count"] == 0
     assert embedded_batches == []
+    assert fake_client.collections["kb__graph_entity__gen-1"].get_calls == [(512, 0)]
+    assert fake_client.collections["kb__graph_relationship__gen-1"].get_calls == [(512, 0)]
 
     full_stats = graph_vector_store.index_graph_vectors_generation(nodes, edges, "gen-3", full_rebuild=True)
     assert full_stats["graph_reused_embedding_count"] == 0
@@ -359,6 +407,7 @@ def test_generation_build_lock_rejects_second_process(tmp_path, monkeypatch):
 class _FakeCollection:
     def __init__(self) -> None:
         self.records = {}
+        self.get_calls = []
 
     def upsert(self, *, ids, documents, embeddings, metadatas):
         for item_id, document, embedding, metadata in zip(ids, documents, embeddings, metadatas):
@@ -370,12 +419,17 @@ class _FakeCollection:
 
     add = upsert
 
-    def get(self, *, include):
+    def get(self, *, include, limit=None, offset=None):
+        self.get_calls.append((limit, offset))
+        items = list(self.records.values())
+        start = int(offset or 0)
+        stop = start + int(limit) if limit is not None else None
+        items = items[start:stop]
         return {
-            "ids": list(self.records),
-            "documents": [item["document"] for item in self.records.values()],
-            "embeddings": [item["embedding"] for item in self.records.values()],
-            "metadatas": [item["metadata"] for item in self.records.values()],
+            "ids": list(self.records)[start:stop],
+            "documents": [item["document"] for item in items],
+            "embeddings": [item["embedding"] for item in items],
+            "metadatas": [item["metadata"] for item in items],
         }
 
     def count(self):
