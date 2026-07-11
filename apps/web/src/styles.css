@@ -36,7 +36,7 @@ button:disabled { cursor: not-allowed; opacity: .62; }
 .icon-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .primary-nav { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
 .primary-nav button, .language-switch button, .page-actions button, .quick-questions button { min-height: 36px; padding: 7px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
-.primary-nav button.active, .language-switch button.active, .primary-button { border-color: var(--accent); background: var(--accent); color: white; box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 22%, transparent); }
+.primary-nav button.active, .language-switch button.active, .primary-button, .page-actions button.primary-button { border-color: var(--accent); background: var(--accent); color: white; box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 22%, transparent); }
 .language-switch { display: inline-flex; }
 .language-switch button { border-radius: 0; }
 .language-switch button:first-child { border-radius: 8px 0 0 8px; }
