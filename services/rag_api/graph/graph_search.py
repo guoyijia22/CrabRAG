@@ -96,6 +96,8 @@ def _governed_text_fallback(query: str, intent: str, top_k: int) -> dict:
         from services.rag_api.vector.chroma_store import search_chunks_by_keywords
 
         chunks = search_chunks_by_keywords(query, intent, entities, top_k=top_k)
+    except IndexCollectionUnavailable:
+        raise
     except Exception:
         chunks = []
     return {"entities": entities, "relation_paths": [], "chunks": chunks[:top_k]}
@@ -135,6 +137,8 @@ def _static_graph_relation_search(query: str, intent: str, top_k: int) -> dict:
         from services.rag_api.vector.chroma_store import search_chunks_by_keywords
 
         chunks = search_chunks_by_keywords(query, intent, entities, top_k=top_k)
+    except IndexCollectionUnavailable:
+        raise
     except Exception:
         chunks = []
     return {"entities": entities, "relation_paths": relation_paths[:top_k], "chunks": chunks[:top_k]}
@@ -423,6 +427,8 @@ def _search_chunks_for_relation_paths(query: str, intent: str, entities: list[st
         from services.rag_api.vector.chroma_store import search_chunks_by_keywords
 
         chunks = search_chunks_by_keywords(query, intent, entities, top_k=max(top_k * 4, top_k + len(relation_paths)))
+    except IndexCollectionUnavailable:
+        raise
     except Exception:
         return []
     return _boost_relation_chunks(chunks, relation_paths)[:top_k]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from services.rag_api.graph.graph_search import graph_relation_search
+from services.rag_api.exceptions import IndexCollectionUnavailable
 from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings
 from services.rag_api.retrieval.optimizations import apply_query_expansion, apply_rerank, keyword_search_candidates
 from services.rag_api.retrieval.cache import RETRIEVAL_CACHE, retrieval_cache_key
@@ -54,6 +55,8 @@ def vector_rule_search(
             rerank_trace = {"enabled": False, "provider": rag_settings.rerank_provider, "fallback": False, "candidate_count": len(vector_results), "reason": "disabled_by_cli_flag"}
         trace.append({"node": "rerank", "output": rerank_trace})
         return {"mode": "vector", "chunks": reranked[:top_k], "relation_paths": [], "error": None, "trace": trace}
+    except IndexCollectionUnavailable:
+        raise
     except Exception as exc:  # noqa: BLE001
         return {"mode": "vector", "chunks": [], "relation_paths": [], "error": str(exc), "trace": trace}
 
@@ -69,6 +72,8 @@ def graph_relation_search_tool(query: str, intent: str, entities: list[str]) -> 
             "error": None,
             "trace": result.get("trace", []),
         }
+    except IndexCollectionUnavailable:
+        raise
     except Exception as exc:  # noqa: BLE001
         return {"mode": "graph", "chunks": [], "relation_paths": [], "error": str(exc), "trace": []}
 
@@ -98,20 +103,33 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
     elif selected_tool == "graph_relation_search_tool":
         result = graph_relation_search_tool(query, intent, entities)
     else:
-        graph_result = graph_relation_search_tool(query, intent, entities)
-        vector_result = vector_rule_search(
-            query,
-            intent,
-            entities,
-            allow_query_expansion=allow_query_expansion,
-            allow_rerank=False,
-            allow_keyword_search=False,
-        )
+        collection_errors: list[str] = []
+        try:
+            graph_result = graph_relation_search_tool(query, intent, entities)
+        except IndexCollectionUnavailable as exc:
+            collection_errors.append(str(exc))
+            graph_result = {"mode": "graph", "chunks": [], "relation_paths": [], "error": str(exc), "trace": []}
+        try:
+            vector_result = vector_rule_search(
+                query,
+                intent,
+                entities,
+                allow_query_expansion=allow_query_expansion,
+                allow_rerank=False,
+                allow_keyword_search=False,
+            )
+        except IndexCollectionUnavailable as exc:
+            collection_errors.append(str(exc))
+            vector_result = {"mode": "vector", "chunks": [], "relation_paths": [], "error": str(exc), "trace": []}
         rag_settings = load_rag_settings()
         candidate_k = _candidate_count(rag_settings, top_k)
         keyword_error = None
         try:
             keyword_results = keyword_search_candidates(query, search_all_chunks(), rag_settings, limit=candidate_k)
+        except IndexCollectionUnavailable as exc:
+            keyword_results = []
+            keyword_error = str(exc)
+            collection_errors.append(str(exc))
         except Exception as exc:  # noqa: BLE001
             keyword_results = []
             keyword_error = str(exc)
@@ -147,11 +165,14 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
                 "reason": "disabled_by_cli_flag",
             }
         trace.append({"node": "hybrid_rerank", "output": rerank_trace})
+        collection_error = "；".join(dict.fromkeys(collection_errors))
+        if collection_error and not chunks and not graph_result["relation_paths"]:
+            raise IndexCollectionUnavailable(collection_error)
         result = {
             "mode": "hybrid",
             "chunks": chunks,
             "relation_paths": graph_result["relation_paths"][:top_k],
-            "error": graph_result["error"] or vector_result["error"],
+            "error": collection_error or graph_result["error"] or vector_result["error"],
             "trace": trace,
         }
     result["chunks"] = result.get("chunks", [])[:top_k]

@@ -15,7 +15,7 @@ from services.rag_api.document.categories import load_kb_categories
 from services.rag_api.document.ingest import ingest_knowledge_base
 from services.rag_api.document.ingest_tasks import get_active_ingest_progress, read_ingest_progress, read_ingest_result, start_ingest_run
 from services.rag_api.document.loader import has_supported_documents
-from services.rag_api.exceptions import DOC_LOAD_ERROR_MESSAGE, LLM_ERROR_MESSAGE, DocumentLoadError, LLMServiceError
+from services.rag_api.exceptions import DOC_LOAD_ERROR_MESSAGE, LLM_ERROR_MESSAGE, DocumentLoadError, IndexCollectionUnavailable, LLMServiceError
 from services.rag_api.evaluation.storage import list_evaluation_runs, read_evaluation_run
 from services.rag_api.evaluation.tasks import get_active_evaluation_progress, read_evaluation_progress, start_evaluation_run
 from services.rag_api.graph.graph_api import build_graph_payload, build_subgraph_payload
@@ -69,20 +69,23 @@ def root() -> dict:
 def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     principal, retrieval_context = _request_retrieval_context(http_request)
     session_id = request.session_id or str(uuid.uuid4())
-    with use_retrieval_context(retrieval_context):
-        state = run_qa(
-            {
-                "session_id": session_id,
-                "question": request.question,
-                "history": get_history(
-                    session_id,
-                    subject=principal.subject,
-                    generation_id=retrieval_context.generation_id,
-                    permission_fingerprint=retrieval_context.permission_fingerprint,
-                ),
-                "trace": [],
-            }
-        )
+    try:
+        with use_retrieval_context(retrieval_context):
+            state = run_qa(
+                {
+                    "session_id": session_id,
+                    "question": request.question,
+                    "history": get_history(
+                        session_id,
+                        subject=principal.subject,
+                        generation_id=retrieval_context.generation_id,
+                        permission_fingerprint=retrieval_context.permission_fingerprint,
+                    ),
+                    "trace": [],
+                }
+            )
+    except IndexCollectionUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     references = _authorized_references(state.get("references", []), retrieval_context.allowed_document_ids)
     relation_paths = _authorized_references(state.get("relation_paths", []), retrieval_context.allowed_document_ids)
     update_memory(
@@ -280,7 +283,9 @@ def get_app_settings() -> AppSettings:
 
 @app.put("/api/app-settings", response_model=AppSettings)
 def update_app_settings(settings: AppSettings) -> AppSettings:
-    return save_app_settings(settings)
+    saved = save_app_settings(settings)
+    get_settings.cache_clear()
+    return saved
 
 
 @app.put("/api/app-settings/sidebar-image", response_model=AppSettings)
@@ -306,20 +311,44 @@ def get_model_settings() -> ModelApiSettingsResponse:
 def update_model_settings(settings: ModelApiSettingsRequest) -> ModelApiSettingsResponse:
     payload = update_model_api_settings(settings)
     get_settings.cache_clear()
-    try:
-        from services.rag_api.llm.local_onnx_embedding import get_local_embedding_model
-        from services.rag_api.llm.local_onnx_rerank import get_local_rerank_model
-        from services.rag_api.llm.local_qwen_llm import shutdown_local_qwen_worker
-        from services.rag_api.llm.siliconflow_client import get_chat_client, get_embedding_client
+    RETRIEVAL_CACHE.clear()
+    _clear_model_runtime_caches()
+    return payload
 
-        get_chat_client.cache_clear()
-        get_embedding_client.cache_clear()
-        get_local_embedding_model.cache_clear()
-        get_local_rerank_model.cache_clear()
-        shutdown_local_qwen_worker()
+
+def _clear_model_runtime_caches() -> None:
+    try:
+        from services.rag_api.llm.siliconflow_client import get_chat_client, get_embedding_client
     except Exception:
         pass
-    return payload
+    else:
+        _best_effort(get_chat_client.cache_clear)
+        _best_effort(get_embedding_client.cache_clear)
+    try:
+        from services.rag_api.llm.local_onnx_embedding import get_local_embedding_model
+    except Exception:
+        pass
+    else:
+        _best_effort(get_local_embedding_model.cache_clear)
+    try:
+        from services.rag_api.llm.local_onnx_rerank import get_local_rerank_model
+    except Exception:
+        pass
+    else:
+        _best_effort(get_local_rerank_model.cache_clear)
+    try:
+        from services.rag_api.llm.local_qwen_llm import shutdown_local_qwen_worker
+    except Exception:
+        pass
+    else:
+        _best_effort(shutdown_local_qwen_worker)
+
+
+def _best_effort(action) -> None:
+    try:
+        action()
+    except Exception:
+        pass
 
 
 @app.get("/api/categories")

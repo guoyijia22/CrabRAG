@@ -130,6 +130,28 @@ def test_generate_answer_node_autofills_general_answer_format(monkeypatch):
     assert "模型未按格式输出" in result["answer"]
 
 
+def test_generate_answer_node_preserves_partial_retrieval_error(monkeypatch):
+    from services.rag_api.agent import nodes
+
+    monkeypatch.setattr(nodes, "get_retrieval_top_k", lambda settings=None: 1)
+    monkeypatch.setattr(nodes, "load_rag_settings", lambda: RagSettings(top_k=1))
+    monkeypatch.setattr(nodes, "chat_completion", lambda messages, temperature, max_tokens: "模型未按格式输出")
+    state = {
+        "question": "问题",
+        "effective_question": "问题",
+        "business_scope": {"in_scope": True},
+        "intent": "通用知识库",
+        "retrieved_chunks": [{"content": "原文证据", "source_file": "general.md"}],
+        "relation_paths": [],
+        "trace": [],
+        "error": "missing graph collection",
+    }
+
+    result = nodes.generate_answer_node(state)
+
+    assert result["error"] == "missing graph collection"
+
+
 def test_generate_answer_node_uses_structured_system_prompt_for_english(monkeypatch):
     from services.rag_api.agent import nodes
 

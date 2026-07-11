@@ -177,7 +177,7 @@ def generate_answer_node(state: QAState) -> QAState:
         )
         if not _answer_has_reference_section(answer, prompt_language):
             answer = _format_answer_from_chunks({**state, "retrieved_chunks": chunks}, answer, language=prompt_language)
-        error = None
+        error = state.get("error")
     except LLMServiceError:
         answer = LLM_ERROR_MESSAGE
         error = LLM_ERROR_MESSAGE

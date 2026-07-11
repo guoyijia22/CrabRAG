@@ -646,3 +646,93 @@ def test_graph_collection_failure_is_not_hidden_by_literal_fallback(monkeypatch)
             {"entity_keywords": ["a"], "relationship_keywords": ["rel"]},
             1,
         )
+
+
+def test_vector_tool_propagates_missing_governed_collection(monkeypatch):
+    from services.rag_api.agent import tools
+    from services.rag_api.exceptions import IndexCollectionUnavailable
+
+    def fail(*args, **kwargs):
+        raise IndexCollectionUnavailable("missing text collection")
+
+    monkeypatch.setattr(tools, "search_chunks", fail)
+
+    with pytest.raises(IndexCollectionUnavailable, match="missing text collection"):
+        tools.vector_rule_search(
+            "query",
+            "intent",
+            [],
+            allow_query_expansion=False,
+            allow_rerank=False,
+        )
+
+
+def test_governed_text_fallback_propagates_missing_collection(monkeypatch):
+    from services.rag_api.exceptions import IndexCollectionUnavailable
+    from services.rag_api.graph import graph_search
+    from services.rag_api.vector import chroma_store
+
+    def fail(*args, **kwargs):
+        raise IndexCollectionUnavailable("missing text collection")
+
+    monkeypatch.setattr(chroma_store, "search_chunks_by_keywords", fail)
+
+    with pytest.raises(IndexCollectionUnavailable, match="missing text collection"):
+        graph_search._governed_text_fallback("query", "intent", 1)
+
+
+def test_hybrid_retrieval_keeps_successful_channel_and_reports_collection_error(monkeypatch):
+    from services.rag_api.agent import tools
+    from services.rag_api.exceptions import IndexCollectionUnavailable
+
+    def fail_graph(*args, **kwargs):
+        raise IndexCollectionUnavailable("missing graph collection")
+
+    monkeypatch.setattr(tools, "graph_relation_search_tool", fail_graph)
+    monkeypatch.setattr(
+        tools,
+        "vector_rule_search",
+        lambda *args, **kwargs: {
+            "mode": "vector",
+            "chunks": [{"document_id": "doc-a", "content": "allowed", "source_file": "a.txt"}],
+            "relation_paths": [],
+            "error": None,
+            "trace": [],
+        },
+    )
+    monkeypatch.setattr(tools, "search_all_chunks", lambda: [])
+
+    result = tools.dispatch_retrieval("query", "intent", [], "hybrid_search", allow_rerank=False)
+
+    assert result["chunks"][0]["document_id"] == "doc-a"
+    assert "missing graph collection" in result["error"]
+
+
+def test_chat_returns_503_when_governed_collection_is_unavailable(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from services.rag_api import main
+    from services.rag_api.exceptions import IndexCollectionUnavailable
+    from services.rag_api.security import PrincipalContext, RetrievalContext
+
+    principal = PrincipalContext.anonymous()
+    context = RetrievalContext(
+        generation_id="gen-1",
+        principal=principal,
+        allowed_document_ids=frozenset({"doc-a"}),
+        permission_fingerprint="anonymous",
+    )
+    monkeypatch.setattr(main, "_request_retrieval_context", lambda request: (principal, context))
+    monkeypatch.setattr(
+        main,
+        "run_qa",
+        lambda state: (_ for _ in ()).throw(IndexCollectionUnavailable("missing text collection")),
+    )
+
+    response = TestClient(main.app, raise_server_exceptions=False).post(
+        "/api/chat",
+        json={"question": "query"},
+    )
+
+    assert response.status_code == 503
+    assert "missing text collection" in response.json()["detail"]

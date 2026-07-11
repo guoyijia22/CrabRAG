@@ -88,6 +88,41 @@ def test_runtime_settings_exposes_multiple_docs_dirs(tmp_path, monkeypatch):
     assert settings.docs_dir == first.resolve()
 
 
+def test_app_settings_api_refreshes_cached_runtime_docs_dirs(tmp_path, monkeypatch):
+    from services.rag_api import app_settings, config, main
+
+    project_root = tmp_path / "project"
+    first = tmp_path / "docs-a"
+    second = tmp_path / "docs-b"
+    monkeypatch.setattr(app_settings, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_PATH", project_root / "data" / "app_settings.json")
+    app_settings.save_app_settings(app_settings.AppSettings(knowledge_base_dirs=[str(first)]))
+    config.get_settings.cache_clear()
+    assert config.get_settings().docs_dirs == [first.resolve()]
+
+    main.update_app_settings(app_settings.AppSettings(knowledge_base_dirs=[str(second)]))
+
+    assert config.get_settings().docs_dirs == [second.resolve()]
+    config.get_settings.cache_clear()
+
+
+def test_app_settings_api_does_not_clear_runtime_cache_when_save_fails(monkeypatch):
+    from services.rag_api import app_settings, main
+
+    cleared = []
+
+    def fail_save(settings):
+        raise OSError("save failed")
+
+    monkeypatch.setattr(main, "save_app_settings", fail_save)
+    monkeypatch.setattr(main.get_settings, "cache_clear", lambda: cleared.append(True))
+
+    with pytest.raises(OSError, match="save failed"):
+        main.update_app_settings(app_settings.AppSettings())
+
+    assert cleared == []
+
+
 def test_load_documents_reads_multiple_dirs_recursively(tmp_path):
     from services.rag_api.document.loader import load_documents
 

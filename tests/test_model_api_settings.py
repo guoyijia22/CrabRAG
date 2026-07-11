@@ -201,6 +201,58 @@ def test_model_settings_api_responses_include_local_model_status(tmp_path, monke
     assert put_payload.local_model_status.missing_count == 3
 
 
+def test_model_settings_update_clears_retrieval_cache(tmp_path, monkeypatch):
+    from services.rag_api import main
+    from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
+
+    _isolate_model_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(model_settings, "PROJECT_ROOT", tmp_path)
+    RETRIEVAL_CACHE.clear()
+    RETRIEVAL_CACHE.set("stale", {"chunks": [{"document_id": "doc-a"}]}, {"doc-a"})
+
+    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False))
+
+    assert RETRIEVAL_CACHE.stats()["size"] == 0
+
+
+def test_model_settings_update_failure_preserves_retrieval_cache(monkeypatch):
+    from services.rag_api import main
+    from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
+
+    RETRIEVAL_CACHE.clear()
+    RETRIEVAL_CACHE.set("stale", {"chunks": [{"document_id": "doc-a"}]}, {"doc-a"})
+
+    def fail_update(settings):
+        raise OSError("save failed")
+
+    monkeypatch.setattr(main, "update_model_api_settings", fail_update)
+
+    with pytest.raises(OSError, match="save failed"):
+        main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False))
+
+    assert RETRIEVAL_CACHE.stats()["size"] == 1
+    RETRIEVAL_CACHE.clear()
+
+
+def test_model_settings_cache_cleanup_continues_after_one_cleanup_fails(tmp_path, monkeypatch):
+    from services.rag_api import main
+
+    _isolate_model_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(model_settings, "PROJECT_ROOT", tmp_path)
+    calls = []
+
+    def fail_chat_clear():
+        calls.append("chat")
+        raise RuntimeError("chat cache clear failed")
+
+    monkeypatch.setattr(siliconflow_client.get_chat_client, "cache_clear", fail_chat_clear)
+    monkeypatch.setattr(siliconflow_client.get_embedding_client, "cache_clear", lambda: calls.append("embedding"))
+
+    main.update_model_settings(model_settings.ModelApiSettingsUpdate(use_local_models=False))
+
+    assert calls == ["chat", "embedding"]
+
+
 def test_chat_model_settings_ignore_env_values(tmp_path, monkeypatch):
     _isolate_model_settings(tmp_path, monkeypatch)
     monkeypatch.setenv("API_KEY", "env-chat-secret")
