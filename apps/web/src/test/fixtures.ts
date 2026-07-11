@@ -46,6 +46,7 @@ export const ragSettings = {
   context_rewrite_enabled: false,
   dynamic_top_k_enabled: false,
   parent_context_enabled: false,
+  dedup_enabled: false,
   rag_param_tuning_enabled: false,
   chunk_size: 600,
   chunk_overlap: 100,

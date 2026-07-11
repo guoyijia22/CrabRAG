@@ -85,6 +85,7 @@ export interface RagSettings {
   context_rewrite_enabled: boolean;
   dynamic_top_k_enabled: boolean;
   parent_context_enabled: boolean;
+  dedup_enabled: boolean;
   rag_param_tuning_enabled: boolean;
   chunk_size: number;
   chunk_overlap: number;
