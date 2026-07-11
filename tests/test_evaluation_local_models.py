@@ -228,7 +228,7 @@ def test_evaluation_collection_is_built_without_publishing_production_generation
     }
     principal = PrincipalContext.anonymous()
     context = RetrievalContext(
-        generation_id="gen-1",
+        generation_id="gen__blue",
         principal=principal,
         allowed_document_ids=frozenset({"doc-a"}),
         permission_fingerprint="permission-1",
@@ -252,7 +252,7 @@ def test_evaluation_collection_is_built_without_publishing_production_generation
     with use_retrieval_context(context):
         runner.ensure_evaluation_collection(profile)
 
-    assert registered == [("gen-1", "evaluation", "crabrag_eval_multi_vector__gen-1")]
+    assert registered == [("gen__blue", "evaluation", "crabrag_eval_multi_vector__gen__blue")]
     assert added == [
         (
             [{"id": "chunk-a"}],

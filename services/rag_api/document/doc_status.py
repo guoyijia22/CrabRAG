@@ -81,11 +81,12 @@ def embedding_fingerprint(settings: Settings) -> str:
         "embedding_provider": settings.embedding_provider,
         "embedding_model": settings.embedding_model,
         "embedding_onnx_model_file": settings.embedding_onnx_model_file,
-        "embedding_base_url": str(settings.embedding_base_url).rstrip("/"),
-        "embedding_openai_compatible": bool(settings.embedding_openai_compatible),
     }
     if settings.embedding_provider == "local_onnx":
         payload["local_artifacts"] = _local_embedding_artifacts(settings)
+    else:
+        payload["embedding_base_url"] = str(settings.embedding_base_url).rstrip("/")
+        payload["embedding_openai_compatible"] = bool(settings.embedding_openai_compatible)
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

@@ -660,6 +660,11 @@ def test_embedding_fingerprint_changes_when_local_model_artifact_changes(tmp_pat
         }
     )
     first = doc_status.embedding_fingerprint(settings)
+    endpoint_only = doc_status.embedding_fingerprint(
+        settings.model_copy(update={"embedding_base_url": "https://unused-local-endpoint.example/v1"})
+    )
+
+    assert endpoint_only == first
 
     (model_dir / "tokenizer.json").write_bytes(b'{"version": 2}')
     second = doc_status.embedding_fingerprint(settings)

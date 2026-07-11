@@ -148,8 +148,8 @@ def ensure_evaluation_collection(profile: dict) -> None:
     collection_name = profile.get("collection_name")
     if not collection_name:
         return
+    generation_id = _evaluation_generation_id()
     target_name = _evaluation_collection_name(profile)
-    generation_id = target_name.rsplit("__", 1)[-1]
     evaluation_fingerprint = _evaluation_fingerprint(profile, generation_id)
     embedding_fingerprint = doc_status.embedding_fingerprint(get_settings())
     index_generation.register_generation_resource(generation_id, "evaluation", target_name)
@@ -288,11 +288,16 @@ def _evaluation_collection_name(profile: dict) -> str | None:
     collection_name = profile.get("collection_name")
     if not collection_name:
         return None
+    generation_id = _evaluation_generation_id()
+    return f"{collection_name}__{generation_id}"
+
+
+def _evaluation_generation_id() -> str:
     context = current_retrieval_context()
     generation_id = context.generation_id if context else index_generation.active_generation_id()
     if not generation_id or generation_id == "legacy":
         raise RuntimeError("评测专用索引要求已发布的治理索引代")
-    return f"{collection_name}__{generation_id}"
+    return str(generation_id)
 
 
 def _evaluation_fingerprint(profile: dict, generation_id: str) -> str:
