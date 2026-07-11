@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from chromadb.errors import NotFoundError
+
 from services.rag_api.config import PROJECT_DIR
 
 
@@ -260,14 +262,27 @@ def cleanup_generations(base_collection: str, chroma_client, *, now: datetime | 
                 collections = resources.get("collections", []) if isinstance(resources, dict) else []
                 if not isinstance(collections, list):
                     raise ValueError("invalid collection resource list")
+                collection_error = False
                 for resource in collections:
                     collection_name = str(resource.get("name") or "") if isinstance(resource, dict) else ""
                     if not collection_name:
                         continue
                     try:
                         chroma_client.delete_collection(collection_name)
-                    except Exception:
-                        pass
+                    except NotFoundError:
+                        continue
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(
+                            {
+                                "generation_id": generation_id,
+                                "collection": collection_name,
+                                "error": str(exc),
+                            }
+                        )
+                        collection_error = True
+                        break
+                if collection_error:
+                    continue
                 shutil.rmtree(resolved)
                 deleted_generations.append(generation_id)
             except Exception as exc:  # noqa: BLE001

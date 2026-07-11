@@ -244,6 +244,66 @@ def test_cleanup_deletes_only_generations_older_than_current_and_previous(tmp_pa
     ]
 
 
+def test_cleanup_deletes_registered_evaluation_collection(tmp_path, monkeypatch):
+    index_generation = _configure_generation_paths(tmp_path, monkeypatch)
+    for generation_id in ("gen-0", "gen-1", "gen-2"):
+        index_generation.record_generation_resources(generation_id, "kb")
+        index_generation.publish_generation(generation_id, {"permission_schema_version": 1})
+    index_generation.register_generation_resource(
+        "gen-0",
+        "evaluation",
+        "crabrag_eval_multi_vector__gen-0",
+    )
+    deleted = []
+
+    class Client:
+        def delete_collection(self, name):
+            deleted.append(name)
+
+    result = index_generation.cleanup_generations("kb", Client())
+
+    assert result["deleted_generations"] == ["gen-0"]
+    assert "crabrag_eval_multi_vector__gen-0" in deleted
+
+
+def test_cleanup_retains_resources_after_transient_collection_delete_failure(tmp_path, monkeypatch):
+    from chromadb.errors import NotFoundError
+
+    index_generation = _configure_generation_paths(tmp_path, monkeypatch)
+    for generation_id in ("gen-0", "gen-1", "gen-2"):
+        index_generation.record_generation_resources(generation_id, "kb")
+        index_generation.publish_generation(generation_id, {"permission_schema_version": 1})
+    generation_dir = index_generation.GENERATIONS_DIR / "gen-0"
+
+    class FailingClient:
+        def delete_collection(self, name):
+            if name == "kb__graph_entity__gen-0":
+                raise RuntimeError("collection is locked")
+
+    first = index_generation.cleanup_generations("kb", FailingClient())
+
+    assert first["deleted_generations"] == []
+    assert first["errors"] == [
+        {
+            "generation_id": "gen-0",
+            "collection": "kb__graph_entity__gen-0",
+            "error": "collection is locked",
+        }
+    ]
+    assert generation_dir.exists()
+    assert (generation_dir / "resources.json").exists()
+
+    class RetryClient:
+        def delete_collection(self, name):
+            if name == "kb__text__gen-0":
+                raise NotFoundError("already deleted")
+
+    second = index_generation.cleanup_generations("kb", RetryClient())
+
+    assert second["deleted_generations"] == ["gen-0"]
+    assert not generation_dir.exists()
+
+
 def test_cleanup_keeps_generation_pinned_by_inflight_request(tmp_path, monkeypatch):
     index_generation = _configure_generation_paths(tmp_path, monkeypatch)
     for generation_id in ("gen-0", "gen-1", "gen-2"):
