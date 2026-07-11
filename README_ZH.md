@@ -162,7 +162,7 @@ bun run check
 生成 Windows x64 发布包及 SHA-256 文件：
 
 ```powershell
-.\scripts\build_release.ps1 -Version 1.1.0 -OutputDir .\release
+.\scripts\build_release.ps1 -Version 1.2.0 -OutputDir .\release
 ```
 
 如果需要从干净虚拟环境重新安装，可以删除 `.venv` 后重新执行安装脚本：
@@ -210,6 +210,19 @@ CrabRAG 使用双代索引原子发布。增量构建在独立 generation 中完
 - `CRABRAG_INTERNAL_TOKEN`：Bun 网关与 RAG API 的内部信任令牌；标准启动脚本会在未配置时自动生成。
 
 本地身份适配器读取 `CRABRAG_SUBJECT`、`CRABRAG_ROLES`、`CRABRAG_GROUPS`、`CRABRAG_PERMISSION_REVISION` 和 `CRABRAG_LOCAL_ADMIN`。浏览器自行提交的同名权限头不会被转发。
+
+## 固定评测集与质量门禁
+
+将 `config/evaluation-dataset.example.json` 复制为 `config/evaluation-dataset.json`，再用当前治理索引中的稳定 `chunk_id`、`document_id` 和权限约束替换示例值。示例文件不能直接作为生产金标准。
+
+评测记录会绑定数据集版本与 SHA-256、索引 generation、权限指纹和检索配置指纹，并统计 Recall@5、MRR@10、引用精确率、引用覆盖率、无证据回答率、ACL/失效内容泄漏率、P95 延迟和模型调用量。只有固定评测集中的候选配置满足以下门禁，设置页才能启用对应增强策略：
+
+- ACL 与失效内容泄漏率均为 `0`。
+- Recall@5 相对基线下降不超过 `0.02`。
+- P95 延迟相对基线增长不超过 `20%`。
+- 至少一项主要质量指标优于基线。
+
+动态 Top-K、父片段上下文和近重复证据去重默认关闭。审批与评测记录保存在 `data/evaluations/`，会随状态备份一并保存。
 
 ## 常见问题
 

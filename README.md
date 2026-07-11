@@ -162,7 +162,7 @@ Because a backup can contain plaintext API credentials, the command marks this i
 Build the Windows x64 release and its SHA-256 file:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 1.1.0 -OutputDir .\release
+.\scripts\build_release.ps1 -Version 1.2.0 -OutputDir .\release
 ```
 
 To rebuild from a clean virtual environment, delete `.venv` and rerun the installer:
@@ -210,6 +210,19 @@ Valid states are `draft`, `published`, and `retired`. Unregistered files are aut
 - `CRABRAG_INTERNAL_TOKEN` protects identity headers between the Bun gateway and RAG API; standard run scripts generate it when absent.
 
 The local identity adapter reads `CRABRAG_SUBJECT`, `CRABRAG_ROLES`, `CRABRAG_GROUPS`, `CRABRAG_PERMISSION_REVISION`, and `CRABRAG_LOCAL_ADMIN`. Identity headers supplied directly by a browser are not forwarded.
+
+## Fixed evaluation datasets and quality gates
+
+Copy `config/evaluation-dataset.example.json` to `config/evaluation-dataset.json`, then replace every example value with reviewed stable `chunk_id`, `document_id`, and permission constraints from the active governed index. The shipped example is not a production gold set.
+
+Evaluation results bind the dataset version and SHA-256 to the index generation, permission fingerprint, and retrieval-configuration fingerprint. They report Recall@5, MRR@10, citation precision and coverage, no-evidence answer rate, ACL/inactive-content leakage, P95 latency, and model calls. A candidate can be enabled in Settings only after a fixed dataset proves that:
+
+- ACL and inactive-content leakage are both `0`.
+- Recall@5 regresses by no more than `0.02` from baseline.
+- P95 latency grows by no more than `20%` from baseline.
+- At least one primary quality metric improves.
+
+Dynamic Top-K, parent-chunk context, and near-duplicate evidence removal are disabled by default. Approvals and evaluation records under `data/evaluations/` are included in state backups.
 
 ## Troubleshooting
 
