@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import zipfile
 
@@ -765,3 +766,34 @@ def test_backup_rejects_knowledge_base_that_contains_or_equals_protected_state(t
 
     with pytest.raises(crabrag_admin.BackupError, match="overlap|protected"):
         crabrag_admin.create_backup(root, tmp_path / "backup.zip")
+
+
+def test_rotate_internal_token_is_atomic_and_never_returns_secret(tmp_path):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    config = root / "config"
+    config.mkdir(parents=True)
+    env_path = config / ".env"
+    env_path.write_text(
+        "# keep this comment\nOTHER=value\nCRABRAG_INTERNAL_TOKEN=old-secret\n",
+        encoding="utf-8",
+    )
+    now = datetime(2026, 7, 12, 0, 0, tzinfo=timezone.utc)
+
+    result = crabrag_admin.rotate_internal_token(
+        root,
+        grace_seconds=300,
+        now=now,
+        token_factory=lambda: "new-secret",
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert "# keep this comment" in text
+    assert "OTHER=value" in text
+    assert "CRABRAG_INTERNAL_TOKEN=new-secret" in text
+    assert "CRABRAG_INTERNAL_TOKEN_PREVIOUS=old-secret" in text
+    assert "CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL=2026-07-12T00:05:00Z" in text
+    assert "old-secret" not in str(result)
+    assert "new-secret" not in str(result)
+    assert result["previous_active"] is True

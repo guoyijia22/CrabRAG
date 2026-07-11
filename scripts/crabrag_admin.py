@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import secrets
 import shutil
 import signal
 import socket
@@ -52,6 +53,73 @@ class BackupError(RuntimeError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def rotate_internal_token(
+    project_root: Path,
+    *,
+    grace_seconds: int = 300,
+    now: datetime | None = None,
+    token_factory: Callable[[], str] | None = None,
+) -> dict[str, object]:
+    if grace_seconds < 0:
+        raise BackupError("token grace period must be non-negative")
+    root = project_root.resolve()
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    env_path = config_dir / ".env"
+    original = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    values: dict[str, str] = {}
+    for line in original.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip().strip('"\'')
+    previous = values.get("CRABRAG_INTERNAL_TOKEN", "")
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
+    expiry = current_time + timedelta(seconds=grace_seconds)
+    new_token = (token_factory or (lambda: secrets.token_urlsafe(48)))()
+    if not new_token or any(character.isspace() or character == "=" for character in new_token):
+        raise BackupError("generated internal token is invalid")
+    replacements = {
+        "CRABRAG_INTERNAL_TOKEN": new_token,
+        "CRABRAG_INTERNAL_TOKEN_PREVIOUS": previous,
+        "CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL": (
+            expiry.isoformat().replace("+00:00", "Z") if previous else ""
+        ),
+    }
+    lines = original.splitlines()
+    output: list[str] = []
+    written: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        key = stripped.split("=", 1)[0].strip() if "=" in stripped and not stripped.startswith("#") else ""
+        if key in replacements:
+            if key not in written:
+                output.append(f"{key}={replacements[key]}")
+                written.add(key)
+            continue
+        output.append(line)
+    for key, value in replacements.items():
+        if key not in written:
+            output.append(f"{key}={value}")
+    content = "\n".join(output).rstrip("\n") + "\n"
+    temporary = config_dir / f".env.{uuid.uuid4().hex}.tmp"
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, env_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {
+        "status": "ok",
+        "rotated_at": current_time.isoformat().replace("+00:00", "Z"),
+        "grace_seconds": grace_seconds,
+        "previous_active": bool(previous and grace_seconds > 0),
+    }
 
 
 def _check(name: str, status: str, message: str, **details: object) -> dict[str, object]:
@@ -913,6 +981,8 @@ def _parser() -> argparse.ArgumentParser:
     restore_parser.add_argument("--archive", type=Path, required=True)
     restore_parser.add_argument("--yes", action="store_true", dest="assume_yes")
     subparsers.add_parser("stop", help="stop processes recorded for this CrabRAG project")
+    rotate_parser = subparsers.add_parser("rotate-token", help="rotate the trusted gateway internal token")
+    rotate_parser.add_argument("--grace-seconds", type=int, default=300)
     return parser
 
 
@@ -941,6 +1011,10 @@ def main(argv: list[str] | None = None) -> int:
             payload, exit_code = stop_services(PROJECT_ROOT)
             print(json.dumps(payload, ensure_ascii=False))
             return exit_code
+        if args.command == "rotate-token":
+            payload = rotate_internal_token(PROJECT_ROOT, grace_seconds=args.grace_seconds)
+            print(json.dumps(payload, ensure_ascii=False))
+            return EXIT_OK
         result = restore_backup(PROJECT_ROOT, args.archive, assume_yes=args.assume_yes)
         print(json.dumps({"status": "ok", **result}, ensure_ascii=False))
         return EXIT_OK

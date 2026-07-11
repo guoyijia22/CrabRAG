@@ -91,6 +91,8 @@ def test_run_scripts_start_api_and_gateway_with_project_environment():
         assert "server/gateway.js" in content
         assert "3003" in content
         assert "8001" in content
+        assert "CRABRAG_INTERNAL_TOKEN_PREVIOUS" in content
+        assert "CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL" in content
 
     assert "run.ps1" in start_bat
     assert ".venv\\Scripts\\python.exe" in cli_bat

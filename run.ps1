@@ -69,6 +69,30 @@ function Test-PortFree {
     }
 }
 
+function Import-InternalTokenEnvironment {
+    param([string]$Path)
+    if (-not [string]::IsNullOrWhiteSpace($env:CRABRAG_INTERNAL_TOKEN)) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -notmatch '^\s*(CRABRAG_INTERNAL_TOKEN|CRABRAG_INTERNAL_TOKEN_PREVIOUS|CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL)\s*=\s*(.*)$') {
+            continue
+        }
+        $name = $Matches[1]
+        $value = $Matches[2].Trim()
+        if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        $existing = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ([string]::IsNullOrWhiteSpace($existing) -and -not [string]::IsNullOrWhiteSpace($value)) {
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+    }
+}
+
 if (-not (Test-PortFree -Port $ApiPort)) {
     Fail "API port $ApiPort is already in use."
 }
@@ -85,6 +109,7 @@ $env:CRABRAG_ENV_FILE = Join-Path $Root "config\.env"
 $env:ELCQA_ENV_FILE = $env:CRABRAG_ENV_FILE
 $env:RAG_BASE_URL = "http://127.0.0.1:$ApiPort"
 $env:PORT = "$WebPort"
+Import-InternalTokenEnvironment -Path $env:CRABRAG_ENV_FILE
 if (-not $env:CRABRAG_INTERNAL_TOKEN) {
     $env:CRABRAG_INTERNAL_TOKEN = [guid]::NewGuid().ToString("N")
 }

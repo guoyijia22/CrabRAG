@@ -73,6 +73,33 @@ finally:
 PY
 }
 
+load_internal_token_environment() {
+  local env_file="$1"
+  [[ -z "${CRABRAG_INTERNAL_TOKEN:-}" ]] || return 0
+  [[ -f "$env_file" ]] || return 0
+  local line key value existing
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    key="${key//[[:space:]]/}"
+    case "$key" in
+      CRABRAG_INTERNAL_TOKEN|CRABRAG_INTERNAL_TOKEN_PREVIOUS|CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL) ;;
+      *) continue ;;
+    esac
+    value="${line#*=}"
+    value="${value#${value%%[![:space:]]*}}"
+    value="${value%${value##*[![:space:]]}}"
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    existing="${!key:-}"
+    if [[ -z "$existing" && -n "$value" ]]; then
+      printf -v "$key" '%s' "$value"
+      export "$key"
+    fi
+  done < "$env_file"
+}
+
 port_free "$API_PORT" || fail "API port $API_PORT is already in use."
 port_free "$WEB_PORT" || fail "Web port $WEB_PORT is already in use."
 
@@ -82,6 +109,7 @@ export CRABRAG_ENV_FILE="$ROOT/config/.env"
 export ELCQA_ENV_FILE="$CRABRAG_ENV_FILE"
 export RAG_BASE_URL="http://127.0.0.1:$API_PORT"
 export PORT="$WEB_PORT"
+load_internal_token_environment "$CRABRAG_ENV_FILE"
 export CRABRAG_INTERNAL_TOKEN="${CRABRAG_INTERNAL_TOKEN:-$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 export PYTHONUTF8=1
 export PYTHONNOUSERSITE=1

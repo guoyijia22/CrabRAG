@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import hmac
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Mapping, Protocol
 
@@ -10,6 +12,7 @@ from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError, PyJWKClientConnectionError, PyJWKClientError
 
 from services.rag_api.security import PrincipalContext, principal_from_headers
+from services.rag_api.runtime_environment import load_runtime_environment
 
 
 class IdentityAuthenticationError(RuntimeError):
@@ -74,12 +77,53 @@ class OidcSettings:
         )
 
 
+@dataclass(frozen=True)
+class InternalTokenSet:
+    current: str
+    previous: str = ""
+    previous_valid_until: datetime | None = None
+
+    @classmethod
+    def from_environment(cls) -> "InternalTokenSet":
+        current = os.getenv("CRABRAG_INTERNAL_TOKEN", "").strip()
+        previous = os.getenv("CRABRAG_INTERNAL_TOKEN_PREVIOUS", "").strip()
+        expiry_value = os.getenv("CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL", "").strip()
+        if not previous and not expiry_value:
+            return cls(current=current)
+        if not current or not previous or not expiry_value:
+            raise IdentityProviderUnavailable("内部令牌轮换配置不完整")
+        try:
+            expiry = datetime.fromisoformat(expiry_value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise IdentityProviderUnavailable("内部令牌宽限期时间无效") from exc
+        if expiry.tzinfo is None or expiry.utcoffset() != timedelta(0):
+            raise IdentityProviderUnavailable("内部令牌宽限期必须使用 UTC 时间")
+        return cls(current=current, previous=previous, previous_valid_until=expiry.astimezone(timezone.utc))
+
+    def is_valid(self, supplied: str, *, now: datetime | None = None) -> bool:
+        if not supplied:
+            return False
+        if self.current and hmac.compare_digest(supplied, self.current):
+            return True
+        current_time = now or datetime.now(timezone.utc)
+        return bool(
+            self.previous
+            and self.previous_valid_until
+            and current_time < self.previous_valid_until
+            and hmac.compare_digest(supplied, self.previous)
+        )
+
+
 class TrustedGatewayIdentityProvider:
-    def __init__(self, internal_token: str | None) -> None:
-        self._internal_token = internal_token
+    def __init__(self, tokens: InternalTokenSet) -> None:
+        self._tokens = tokens
 
     def authenticate(self, headers: Mapping[str, str]) -> PrincipalContext:
-        return principal_from_headers(headers, internal_token=self._internal_token)
+        normalized = {str(key).lower(): str(value) for key, value in headers.items()}
+        supplied = normalized.get("x-crabrag-internal-token", "")
+        if not self._tokens.is_valid(supplied):
+            return PrincipalContext.anonymous()
+        return principal_from_headers(headers, internal_token=supplied)
 
 
 class OidcJwtIdentityProvider:
@@ -153,10 +197,13 @@ class CompositeIdentityProvider:
 
 
 def get_identity_provider() -> CompositeIdentityProvider:
+    load_runtime_environment()
     environment = tuple(
         os.getenv(name, "")
         for name in (
             "CRABRAG_INTERNAL_TOKEN",
+            "CRABRAG_INTERNAL_TOKEN_PREVIOUS",
+            "CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL",
             "CRABRAG_OIDC_ISSUER",
             "CRABRAG_OIDC_AUDIENCE",
             "CRABRAG_OIDC_JWKS_URL",
@@ -176,7 +223,7 @@ def _cached_identity_provider(_environment: tuple[str, ...]) -> CompositeIdentit
     settings = OidcSettings.from_environment()
     return CompositeIdentityProvider(
         oidc=OidcJwtIdentityProvider(settings) if settings else None,
-        local=TrustedGatewayIdentityProvider(os.getenv("CRABRAG_INTERNAL_TOKEN")),
+        local=TrustedGatewayIdentityProvider(InternalTokenSet.from_environment()),
     )
 
 

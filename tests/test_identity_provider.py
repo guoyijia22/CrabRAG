@@ -10,6 +10,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from services.rag_api.identity import (
     CompositeIdentityProvider,
     IdentityAuthenticationError,
+    IdentityProviderUnavailable,
+    InternalTokenSet,
     OidcJwtIdentityProvider,
     OidcSettings,
 )
@@ -155,3 +157,26 @@ def test_enterprise_mode_without_bearer_is_anonymous(signing_key):
     )
 
     assert provider.authenticate({}) == PrincipalContext.anonymous()
+
+
+def test_internal_token_set_accepts_current_and_unexpired_previous():
+    now = datetime(2026, 7, 12, 0, 0, tzinfo=timezone.utc)
+    tokens = InternalTokenSet(
+        current="current-token",
+        previous="previous-token",
+        previous_valid_until=now + timedelta(minutes=5),
+    )
+
+    assert tokens.is_valid("current-token", now=now)
+    assert tokens.is_valid("previous-token", now=now)
+    assert not tokens.is_valid("wrong-token", now=now)
+    assert not tokens.is_valid("previous-token", now=now + timedelta(minutes=5))
+
+
+def test_internal_token_set_rejects_malformed_previous_expiry(monkeypatch):
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN", "current-token")
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN_PREVIOUS", "previous-token")
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN_PREVIOUS_VALID_UNTIL", "not-a-time")
+
+    with pytest.raises(IdentityProviderUnavailable):
+        InternalTokenSet.from_environment()
