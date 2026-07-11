@@ -631,8 +631,9 @@ def _run_state_process_matches(item: object, project_root: Path, ports: list[int
     try:
         Path(executable).resolve().relative_to(project_root.resolve())
     except ValueError:
+        normalized_root = str(project_root.resolve()).replace("\\", "/").casefold()
         if (
-            str(project_root.resolve()).casefold() not in command_line.casefold()
+            normalized_root not in command_line.casefold()
             and not owns_configured_port
             and not cwd_matches
         ):

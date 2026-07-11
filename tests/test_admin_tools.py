@@ -433,6 +433,34 @@ def test_global_bun_web_process_is_trusted_by_identity_role_and_owned_custom_por
     assert crabrag_admin._run_state_process_matches(item, root, [3103, 8101]) is True
 
 
+def test_global_bun_web_process_is_trusted_before_bind_when_command_uses_absolute_gateway(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "Crab RAG"
+    item = {"pid": 457, "role": "web", "start_identity": "start-web-absolute"}
+    gateway = (root / "server" / "gateway.js").resolve().as_posix()
+    monkeypatch.setattr(crabrag_admin, "_process_is_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        crabrag_admin,
+        "_process_runtime_info",
+        lambda _pid: {
+            "command_line": f'"C:/Program Files/Bun/bun.exe" "{gateway}"',
+            "executable": "C:/Program Files/Bun/bun.exe",
+            "start_identity": "start-web-absolute",
+            "ports": [],
+        },
+    )
+
+    assert crabrag_admin._run_state_process_matches(item, root, [3103, 8101]) is True
+
+
+def test_windows_runner_passes_absolute_gateway_path_to_bun():
+    source = Path("run.ps1").read_text(encoding="utf-8")
+
+    assert '$GatewayPath = Join-Path $Root "server\\gateway.js"' in source
+    assert '-ArgumentList @($GatewayPath)' in source
+
+
 def test_linux_proc_runtime_info_includes_process_cwd(tmp_path: Path):
     from scripts import crabrag_admin
 
