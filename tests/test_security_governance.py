@@ -77,6 +77,44 @@ def test_conversation_memory_isolated_by_permission_revision():
     ) == []
 
 
+def test_conversation_memory_uses_sliding_ttl(monkeypatch):
+    from services.rag_api.memory import conversation_memory
+
+    now = {"value": 0.0}
+    monkeypatch.setattr(conversation_memory, "_time", lambda: now["value"])
+    monkeypatch.setattr(conversation_memory, "SESSION_TTL_SECONDS", 1800)
+    conversation_memory.clear_memory()
+    conversation_memory.update_memory("session", "question", "answer", "", [])
+
+    now["value"] = 1700.0
+    assert conversation_memory.get_history("session")
+    now["value"] = 3400.0
+    assert conversation_memory.get_history("session")
+    now["value"] = 5201.0
+    assert conversation_memory.get_history("session") == []
+
+
+def test_conversation_memory_evicts_least_recently_used_session(monkeypatch):
+    from services.rag_api.memory import conversation_memory
+
+    now = {"value": 0.0}
+    monkeypatch.setattr(conversation_memory, "_time", lambda: now["value"])
+    monkeypatch.setattr(conversation_memory, "MAX_SESSION_ENTRIES", 2)
+    conversation_memory.clear_memory()
+    conversation_memory.update_memory("session-a", "a", "answer-a", "", [])
+    now["value"] = 1.0
+    conversation_memory.update_memory("session-b", "b", "answer-b", "", [])
+    now["value"] = 2.0
+    assert conversation_memory.get_history("session-a")
+    now["value"] = 3.0
+    conversation_memory.update_memory("session-c", "c", "answer-c", "", [])
+
+    assert conversation_memory.get_history("session-b") == []
+    assert conversation_memory.get_history("session-a")
+    assert conversation_memory.get_history("session-c")
+    assert len(conversation_memory.SESSION_MEMORY) == 2
+
+
 def test_vector_search_applies_allowed_document_filter_before_query(monkeypatch):
     from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
     from services.rag_api.vector import chroma_store

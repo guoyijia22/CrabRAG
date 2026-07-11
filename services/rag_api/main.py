@@ -249,7 +249,7 @@ def rollback_index(http_request: Request) -> dict:
     RETRIEVAL_CACHE.clear()
     from services.rag_api.memory import conversation_memory
 
-    conversation_memory.SESSION_MEMORY.clear()
+    conversation_memory.clear_memory()
     return {**state, "status": "rolled_back"}
 
 

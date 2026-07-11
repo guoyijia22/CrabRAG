@@ -281,7 +281,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
 
     RETRIEVAL_CACHE.clear()
-    conversation_memory.SESSION_MEMORY.clear()
+    conversation_memory.clear_memory()
     return {
         "status": "success",
         "generation_id": generation_id,
