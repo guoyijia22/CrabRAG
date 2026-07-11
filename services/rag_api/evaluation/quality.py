@@ -176,11 +176,13 @@ def _is_invalid_content(reference: dict, expected: dict) -> bool:
     ).lower()
     if status in _INACTIVE_STATUSES:
         return True
-    if any(value is True for value in validity):
-        return False
     document_id = str(reference.get("document_id") or metadata.get("document_id") or "")
     forbidden = _string_values(expected.get("retired_document_ids")) | _string_values(expected.get("forbidden_document_ids"))
-    return bool(document_id and document_id in forbidden)
+    if document_id and document_id in forbidden:
+        return True
+    if any(value is True for value in validity):
+        return False
+    return False
 
 
 def _string_values(value) -> set[str]:

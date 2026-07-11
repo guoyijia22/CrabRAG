@@ -117,3 +117,15 @@ def test_generation_change_disables_stale_approved_runtime_strategy(tmp_path: Pa
 
     assert effective.rerank_enabled is False
     assert rag_settings.RagSettings.model_validate_json(rag_settings.SETTINGS_PATH.read_text(encoding="utf-8")).rerank_enabled is True
+
+
+def test_missing_governed_generation_fails_closed_for_controlled_strategies(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(rag_settings, "SETTINGS_PATH", tmp_path / "rag_settings.json")
+    monkeypatch.setattr(approval, "APPROVALS_PATH", tmp_path / "approvals.json")
+    monkeypatch.setattr(approval.index_generation, "active_generation_id", lambda: None)
+    candidate = RagSettings(dynamic_top_k_enabled=True)
+    rag_settings.save_rag_settings(candidate)
+
+    assert rag_settings.load_rag_settings().dynamic_top_k_enabled is False
+    with pytest.raises(ValueError, match="治理索引代"):
+        approval.require_strategy_approval(RagSettings(), candidate, None)

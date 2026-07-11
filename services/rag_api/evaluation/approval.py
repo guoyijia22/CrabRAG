@@ -80,7 +80,9 @@ def is_settings_approved(settings: RagSettings, generation_id: str | None) -> bo
 def require_strategy_approval(current: RagSettings, candidate: RagSettings, generation_id: str | None) -> None:
     del current
     enabled = [key for key in SWITCH_KEYS if bool(getattr(candidate, key, False))]
-    if generation_id and enabled and not is_settings_approved(candidate, generation_id):
+    if enabled and not generation_id:
+        raise ValueError("启用检索增强策略前，必须先发布可评测的治理索引代")
+    if enabled and not is_settings_approved(candidate, generation_id):
         raise ValueError(
             "启用检索增强策略前，必须在当前索引代使用固定评测集通过质量门禁；"
             f"待批准策略：{', '.join(enabled)}"
@@ -96,7 +98,7 @@ def effective_runtime_settings(settings: RagSettings) -> RagSettings:
     except Exception:  # noqa: BLE001
         generation_id = "unavailable"
     if not generation_id:
-        return settings
+        return settings.model_copy(update={key: False for key in SWITCH_KEYS})
     if is_settings_approved(settings, generation_id):
         return settings
     return settings.model_copy(update={key: False for key in SWITCH_KEYS})

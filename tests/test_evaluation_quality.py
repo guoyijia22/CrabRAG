@@ -402,3 +402,23 @@ def test_governed_reference_version_mismatch_is_inactive_even_when_document_id_e
     assert calculate_quality_metrics([{"expected": {"expect_references": True}, "references": annotated}])[
         "invalid_content_leakage_rate"
     ] == 1.0
+
+
+def test_fixed_dataset_forbidden_document_remains_invalid_when_manifest_is_active():
+    metrics = calculate_quality_metrics(
+        [
+            {
+                "expected": {"expect_references": True, "forbidden_document_ids": ["doc-forbidden"]},
+                "references": [
+                    {
+                        "document_id": "doc-forbidden",
+                        "document_version": "1",
+                        "publish_status": "published",
+                        "is_active": True,
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert metrics["invalid_content_leakage_rate"] == 1.0
