@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 
 from services.rag_api.identity import (
     CompositeIdentityProvider,
@@ -131,6 +132,68 @@ def test_oidc_provider_rejects_alg_none_before_jwks_lookup(signing_key):
     assert client.tokens == []
 
 
+def test_oidc_provider_rejects_algorithm_outside_allowlist_before_jwks_lookup():
+    shared_secret = b"shared-secret-with-at-least-32-bytes"
+    client = StaticJwksClient(shared_secret)
+    provider = OidcJwtIdentityProvider(_settings(), jwks_client=client)
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {"sub": "alice", "iss": ISSUER, "aud": AUDIENCE, "exp": now + timedelta(minutes=5)},
+        key=shared_secret,
+        algorithm="HS256",
+        headers={"kid": "key-1"},
+    )
+
+    with pytest.raises(IdentityAuthenticationError):
+        provider.authenticate({"authorization": f"Bearer {token}"})
+
+    assert client.tokens == []
+
+
+def test_oidc_provider_rejects_wrong_signature(signing_key):
+    other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    provider = OidcJwtIdentityProvider(
+        _settings(),
+        jwks_client=StaticJwksClient(other_key.public_key()),
+    )
+
+    with pytest.raises(IdentityAuthenticationError):
+        provider.authenticate({"authorization": f"Bearer {_token(signing_key)}"})
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_error"),
+    [
+        (PyJWKClientError("unknown kid"), IdentityAuthenticationError),
+        (PyJWKClientConnectionError("jwks unavailable"), IdentityProviderUnavailable),
+    ],
+)
+def test_oidc_provider_fails_closed_when_jwks_lookup_fails(signing_key, error, expected_error):
+    class FailingJwksClient:
+        def get_signing_key_from_jwt(self, token):
+            raise error
+
+    provider = OidcJwtIdentityProvider(_settings(), jwks_client=FailingJwksClient())
+
+    with pytest.raises(expected_error):
+        provider.authenticate({"authorization": f"Bearer {_token(signing_key)}"})
+
+
+@pytest.mark.parametrize("missing_claim", ["sub", "exp"])
+def test_oidc_provider_rejects_missing_required_claim(signing_key, missing_claim):
+    now = datetime.now(timezone.utc)
+    claims = {"sub": "alice", "iss": ISSUER, "aud": AUDIENCE, "exp": now + timedelta(minutes=5)}
+    del claims[missing_claim]
+    token = jwt.encode(claims, signing_key, algorithm="RS256", headers={"kid": "key-1"})
+    provider = OidcJwtIdentityProvider(
+        _settings(),
+        jwks_client=StaticJwksClient(signing_key.public_key()),
+    )
+
+    with pytest.raises(IdentityAuthenticationError):
+        provider.authenticate({"authorization": f"Bearer {token}"})
+
+
 def test_bearer_failure_never_falls_back_to_trusted_gateway(signing_key):
     oidc = OidcJwtIdentityProvider(
         _settings(),
@@ -145,6 +208,15 @@ def test_bearer_failure_never_falls_back_to_trusted_gateway(signing_key):
         provider.authenticate({"authorization": "Bearer not-a-jwt"})
 
     assert local.calls == 0
+
+
+def test_local_identity_provider_remains_compatible_when_oidc_is_disabled():
+    expected = PrincipalContext("local-admin", ("admin",), (), "1", True)
+    local = StaticProvider(expected)
+    provider = CompositeIdentityProvider(oidc=None, local=local)
+
+    assert provider.authenticate({}) == expected
+    assert local.calls == 1
 
 
 def test_enterprise_mode_without_bearer_is_anonymous(signing_key):
