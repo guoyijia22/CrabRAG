@@ -55,7 +55,7 @@ def test_linux_installation_paths_are_hardened_for_source_clones():
     gitattributes = read_text(".gitattributes")
 
     assert "*.sh text eol=lf" in gitattributes
-    assert "if ! \"$VENV_PYTHON\" - \"$bun_archive\" \"$PORTABLE_BUN\"" in install_sh
+    assert "if ! \"$VENV_PYTHON\" - \"$BUN_RELEASE_BASE_URL\" \"$bun_archive\" \"$bun_sha256\" \"$PORTABLE_BUN\"" in install_sh
     assert "Failed to download project-local Bun" in install_sh
     assert "runtime/bun/bun" in run_sh
     assert '"bun.exe"' in local_qwen
@@ -82,6 +82,36 @@ def test_run_scripts_start_api_and_gateway_with_project_environment():
     assert ".venv\\Scripts\\python.exe" in cli_bat
     assert "runtime\\python\\python.exe" in cli_bat
     assert "services.rag_api.cli.evidence" in cli_bat
+
+
+def test_bun_downloads_are_version_pinned_and_verified_before_extraction():
+    install_ps1 = read_text("install.ps1")
+    install_sh = read_text("install.sh")
+
+    assert 'BunVersion = "1.3.14"' in install_ps1
+    assert "releases/download/bun-v1.3.14/bun-windows-x64.zip" in install_ps1
+    assert "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922" in install_ps1
+    assert "Get-FileHash" in install_ps1
+    assert install_ps1.index("Get-FileHash") < install_ps1.index("Expand-Archive")
+    assert "releases/latest" not in install_ps1
+    assert "Test-BunVersion" in install_ps1
+
+    assert 'BUN_VERSION="1.3.14"' in install_sh
+    assert "releases/download/bun-v1.3.14" in install_sh
+    assert "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f" in install_sh
+    assert "a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b" in install_sh
+    assert "hashlib.sha256" in install_sh
+    assert install_sh.index("hashlib.sha256") < install_sh.index("zipfile.ZipFile")
+    assert "releases/latest" not in install_sh
+    assert "bun_version_ok" in install_sh
+
+
+def test_start_batch_preserves_powershell_exit_code():
+    start_bat = read_text("start.bat")
+
+    assert 'set "EXIT_CODE=%ERRORLEVEL%"' in start_bat
+    assert "if not %EXIT_CODE%==0 pause" in start_bat
+    assert "exit /b %EXIT_CODE%" in start_bat
 
 
 def test_installation_metadata_and_smoke_check_are_documented():

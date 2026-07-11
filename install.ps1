@@ -35,6 +35,8 @@ $EnvExample = Join-Path $Root "config\.env.example"
 $EnvPath = Join-Path $Root "config\.env"
 $PortableBun = Join-Path $Root "runtime\bun\bun.exe"
 $PortableBunDir = Join-Path $Root "runtime\bun"
+$BunVersion = "1.3.14"
+$BunWindowsX64Sha256 = "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922"
 
 function Test-PythonCandidate {
     param(
@@ -85,29 +87,46 @@ function Require-Command {
     return $command.Source
 }
 
+function Test-BunVersion {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    try {
+        return ((& $Path --version 2>$null | Select-Object -First 1).Trim() -eq $BunVersion)
+    } catch {
+        return $false
+    }
+}
+
 function Resolve-BunForInstall {
-    if (Test-Path $PortableBun) {
+    if (Test-BunVersion -Path $PortableBun) {
         return $PortableBun
     }
     $command = Get-Command "bun" -ErrorAction SilentlyContinue
-    if ($null -ne $command) {
+    if ($null -ne $command -and (Test-BunVersion -Path $command.Source)) {
         return $command.Source
     }
 
     Install-PortableBun
-    if (Test-Path $PortableBun) {
+    if (Test-BunVersion -Path $PortableBun) {
         return $PortableBun
     }
-    Fail "Failed to install project-local Bun. Install Bun from https://bun.sh/docs/installation and rerun .\install.ps1."
+    Fail "Failed to install project-local Bun $BunVersion."
 }
 
 function Install-PortableBun {
-    Write-Step "Bun was not found. Downloading project-local Bun to runtime\bun."
+    Write-Step "Downloading verified project-local Bun $BunVersion to runtime\bun."
     New-Item -ItemType Directory -Path $PortableBunDir -Force | Out-Null
     $archive = Join-Path ([System.IO.Path]::GetTempPath()) "crabrag-bun-$PID.zip"
     $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) "crabrag-bun-$PID"
     try {
-        Invoke-WebRequest -Uri "https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip" -OutFile $archive
+        Invoke-WebRequest -Uri "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64.zip" -OutFile $archive
+        $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualSha256 -ne $BunWindowsX64Sha256) {
+            Fail "Downloaded Bun archive checksum mismatch."
+        }
         Expand-Archive -LiteralPath $archive -DestinationPath $extractDir -Force
         $bunExe = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter "bun.exe" | Select-Object -First 1
         if ($null -eq $bunExe) {
