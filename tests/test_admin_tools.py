@@ -30,6 +30,10 @@ def _seed_project(root: Path, external_docs: Path) -> None:
     (root / "data" / "model_api_settings.json").write_text(
         '{"api_key": "stored-secret"}', encoding="utf-8"
     )
+    (root / "data" / "evaluations").mkdir(parents=True)
+    (root / "data" / "evaluations" / "quality-approvals.json").write_text(
+        '{"schema_version": 1, "items": []}', encoding="utf-8"
+    )
 
 
 def test_doctor_clean_install_reports_warnings_without_exposing_secrets(tmp_path: Path, monkeypatch):
@@ -146,6 +150,7 @@ def test_backup_contains_governed_state_and_only_records_external_document_paths
         assert "payload/data/chroma/chroma.sqlite3" in names
         assert "payload/data/index/active.json" in names
         assert "payload/data/ui/sidebar-image.json" in names
+        assert "payload/data/evaluations/quality-approvals.json" in names
         assert "payload/data/app_settings.json" in names
         assert not any("customer.txt" in name for name in names)
         stored_manifest = json.loads(bundle.read("manifest.json"))

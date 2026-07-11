@@ -32,6 +32,7 @@ SERVICE_PORTS = (3003, 8001)
 _BACKUP_DIRECTORIES = (
     "config",
     "data/chroma",
+    "data/evaluations",
     "data/index",
     "data/ui",
 )
