@@ -17,6 +17,7 @@ class ReleaseError(RuntimeError):
 REQUIRED_FILES = (
     "VERSION",
     "LICENSE",
+    "CHANGELOG.md",
     "README.md",
     "README_ZH.md",
     "README_PORTABLE.md",

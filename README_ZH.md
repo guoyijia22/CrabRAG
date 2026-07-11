@@ -68,7 +68,7 @@ sudo dnf install -y python3 python3-pip
 - `RAG_BASE_URL`：手动启动服务时，Bun 网关访问的 Python API 地址。
 - `PORT`：手动启动 `server/gateway.js` 时使用的 Web 网关端口。
 
-模型 API Key 和聊天模型设置通常在页面的“设置”中配置，不需要写入 `config/.env`。
+模型 API Key 的读取优先级为环境变量、操作系统 keyring、未配置。可在 `config/.env` 设置 `CRABRAG_API_KEY`，也可由管理员在“设置”页写入操作系统安全存储；`data/model_api_settings.json` 不再保存明文密钥。
 
 ## 本地模型
 
@@ -157,12 +157,12 @@ bun run check
 ```
 
 备份包含本地配置、Chroma、索引 generation 和应用状态。外部知识库文件不会进入备份，只记录规范化后的目录路径。恢复前必须停止 CrabRAG；恢复会先检查格式、软件兼容性、路径边界和每个文件的 SHA-256，全部通过后才替换本地状态。
-备份可能包含明文 API 凭据，因此命令会在 manifest 和输出中明确告警，并在操作系统支持时设置为仅所有者可访问。请像保管 API Key 一样安全保管备份 ZIP。
+操作系统 keyring 中的模型密钥不会进入备份。`config/.env` 仍可能包含内部令牌或遗留明文凭据，因此命令会在 manifest 和输出中明确告警，并在操作系统支持时设置为仅所有者可访问。请将备份 ZIP 保存在受控位置。
 
 生成 Windows x64 发布包及 SHA-256 文件：
 
 ```powershell
-.\scripts\build_release.ps1 -Version 1.2.0 -OutputDir .\release
+.\scripts\build_release.ps1 -Version 1.3.0 -OutputDir .\release
 ```
 
 如果需要从干净虚拟环境重新安装，可以删除 `.venv` 后重新执行安装脚本：
@@ -210,6 +210,34 @@ CrabRAG 使用双代索引原子发布。增量构建在独立 generation 中完
 - `CRABRAG_INTERNAL_TOKEN`：Bun 网关与 RAG API 的内部信任令牌；标准启动脚本会在未配置时自动生成。
 
 本地身份适配器读取 `CRABRAG_SUBJECT`、`CRABRAG_ROLES`、`CRABRAG_GROUPS`、`CRABRAG_PERMISSION_REVISION` 和 `CRABRAG_LOCAL_ADMIN`。浏览器自行提交的同名权限头不会被转发。
+
+## 企业身份与安全接入
+
+启用 OIDC/JWT 时必须同时配置 issuer、audience 和 JWKS URL。Bun 网关只向受保护路由转发浏览器的 `Authorization: Bearer ...`，同时继续剥离浏览器伪造的 `x-crabrag-*` 头；Python API 验证签名、算法白名单、`kid`、issuer、audience、`exp` 和 `nbf`。Bearer Token 存在但无效时不会回退本地身份。
+
+```dotenv
+CRABRAG_OIDC_ISSUER=https://identity.example.com/tenant
+CRABRAG_OIDC_AUDIENCE=crabrag
+CRABRAG_OIDC_JWKS_URL=https://identity.example.com/tenant/.well-known/jwks.json
+CRABRAG_OIDC_ALGORITHMS=RS256
+```
+
+企业权限适配器只发送主体、角色、组、权限修订号和 generation 摘要，不发送问题、回答或文档正文。超时、5xx、非法响应、权限修订不一致或返回非当前 generation 文档时，所有检索通道均 fail closed。
+
+```dotenv
+CRABRAG_PERMISSION_PROVIDER=http
+CRABRAG_PERMISSION_URL=https://permissions.example.com/crabrag/check
+CRABRAG_PERMISSION_TIMEOUT_SECONDS=5
+```
+
+内部令牌轮换与安全审计命令：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py rotate-token --grace-seconds 300
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py audit-verify
+```
+
+轮换命令原子更新 `config/.env`，不输出令牌值；重启服务后使用新令牌，并在 UTC 宽限期内接受上一令牌。安全审计位于 `data/audit/`，使用连续序号、SHA-256 哈希链、原子锚点和 `fsync`，不记录 Token、API Key、用户问题、回答或文档正文。
 
 ## 固定评测集与质量门禁
 

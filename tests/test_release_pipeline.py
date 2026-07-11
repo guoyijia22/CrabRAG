@@ -15,6 +15,7 @@ def _minimal_release_tree(root: Path) -> None:
     files = {
         "VERSION": "1.1.0\n",
         "LICENSE": "MIT",
+        "CHANGELOG.md": "# Changelog\n",
         "README.md": "readme",
         "README_ZH.md": "readme zh",
         "README_PORTABLE.md": "portable",
@@ -78,6 +79,7 @@ def test_release_builder_includes_runtime_files_and_excludes_development_and_use
     assert "CrabRAG/server/gateway.js" in names
     assert "CrabRAG/config/.env.example" in names
     assert "CrabRAG/config/evaluation-dataset.example.json" in names
+    assert "CrabRAG/CHANGELOG.md" in names
     assert "CrabRAG/scripts/check_env.py" in names
     assert "CrabRAG/scripts/stop.ps1" in names
     assert "CrabRAG/package.json" in names

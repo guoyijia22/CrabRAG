@@ -102,4 +102,8 @@ jobs:
           tests/test_document_manifest.py
           tests/test_index_generation.py
           tests/test_security_governance.py
+          tests/test_identity_provider.py
+          tests/test_enterprise_permissions.py
+          tests/test_security_audit.py
+          tests/test_secret_storage.py
           tests/test_admin_tools.py

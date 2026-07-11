@@ -6,8 +6,8 @@ from pathlib import Path
 def test_version_has_single_repository_source_and_frontend_uses_it():
     from services.rag_api.version import SOFTWARE_VERSION
 
-    assert Path("VERSION").read_text(encoding="utf-8").strip() == "1.2.0"
-    assert SOFTWARE_VERSION == "1.2.0"
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "1.3.0"
+    assert SOFTWARE_VERSION == "1.3.0"
     vite = Path("apps/web/vite.config.ts").read_text(encoding="utf-8")
     header = Path("apps/web/src/components/AppHeader.tsx").read_text(encoding="utf-8")
     assert "VERSION" in vite
@@ -27,8 +27,8 @@ def test_health_keeps_legacy_fields_and_adds_build_and_model_capabilities(monkey
 
     for legacy in ("web", "rag_service", "docs_dir_exists", "docs_dir_has_files", "docs_dirs", "chroma", "llm_api", "active_generation", "index_scheduler"):
         assert legacy in payload
-    assert payload["software_version"] == "1.2.0"
-    assert payload["build"]["version"] == "1.2.0"
+    assert payload["software_version"] == "1.3.0"
+    assert payload["build"]["version"] == "1.3.0"
     assert set(payload["model_capabilities"]) == {"remote", "local"}
     assert payload["model_capabilities"]["remote"]["configured"] is False
     assert payload["model_capabilities"]["local"]["available"] is False

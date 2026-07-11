@@ -25,7 +25,11 @@ Double-click `stop.bat`.
 If you replace files in `docs\`, start the system and rebuild the knowledge base from the Knowledge page.
 
 Run `.\.venv\Scripts\python.exe scripts\crabrag_admin.py doctor --json` for structured diagnostics. Before an upgrade, use `.\.venv\Scripts\python.exe scripts\crabrag_admin.py backup --output backup.zip`. Stop the service before running `.\.venv\Scripts\python.exe scripts\crabrag_admin.py restore --archive backup.zip --yes`.
-Backup ZIP files may contain plaintext API credentials. Keep them in an owner-only location and do not upload them to source control or public storage.
+Operating-system keyring credentials are not copied into backups. A backup can still contain internal tokens or legacy plaintext values from `config\.env`; keep it in an owner-only location.
+
+Model API keys use environment variables first (`CRABRAG_API_KEY`) and the operating-system keyring second. The Settings page writes keys to the keyring, never to JSON.
+
+Rotate the trusted gateway token with `scripts\crabrag_admin.py rotate-token --grace-seconds 300`, restart CrabRAG, and verify the append-only security audit with `scripts\crabrag_admin.py audit-verify`.
 
 The release archive excludes tests, development source, caches, logs, user data, secrets, and local model files. The installer recreates required runtime directories and dependencies.
 

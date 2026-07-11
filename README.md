@@ -68,7 +68,7 @@ Common settings:
 - `RAG_BASE_URL`: API endpoint used by the gateway when you start services manually.
 - `PORT`: web gateway port when you start `server/gateway.js` manually.
 
-Model API keys and chat model settings are normally configured in the Settings page, not in `config/.env`.
+Model API keys resolve from environment variables, then the operating-system keyring. Set `CRABRAG_API_KEY` in `config/.env`, or let an administrator save credentials to the keyring from Settings; `data/model_api_settings.json` never stores plaintext keys.
 
 ## Local Models
 
@@ -157,12 +157,12 @@ Create and restore a verified backup:
 ```
 
 Backups include local configuration, Chroma, index generations, and application state. External knowledge-base files are never copied; only their normalized directory paths are recorded. Stop CrabRAG before restore. Restore validates the format, software compatibility, paths, and every SHA-256 checksum before changing local state.
-Because a backup can contain plaintext API credentials, the command marks this in its manifest and output and applies owner-only file permissions where the operating system supports them. Store backup ZIP files as securely as API keys.
+Model credentials held by the operating-system keyring are not included in backups. `config/.env` can still contain internal tokens or legacy plaintext credentials, so the command marks secret-bearing archives and applies owner-only permissions where supported.
 
 Build the Windows x64 release and its SHA-256 file:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 1.2.0 -OutputDir .\release
+.\scripts\build_release.ps1 -Version 1.3.0 -OutputDir .\release
 ```
 
 To rebuild from a clean virtual environment, delete `.venv` and rerun the installer:
@@ -210,6 +210,34 @@ Valid states are `draft`, `published`, and `retired`. Unregistered files are aut
 - `CRABRAG_INTERNAL_TOKEN` protects identity headers between the Bun gateway and RAG API; standard run scripts generate it when absent.
 
 The local identity adapter reads `CRABRAG_SUBJECT`, `CRABRAG_ROLES`, `CRABRAG_GROUPS`, `CRABRAG_PERMISSION_REVISION`, and `CRABRAG_LOCAL_ADMIN`. Identity headers supplied directly by a browser are not forwarded.
+
+## Enterprise identity and security
+
+OIDC/JWT mode requires an issuer, audience, and JWKS URL. The gateway forwards `Authorization: Bearer ...` only to protected routes while rebuilding trusted `x-crabrag-*` headers. The Python API validates signatures, the algorithm allowlist, `kid`, issuer, audience, `exp`, and `nbf`; an invalid Bearer token never falls back to local identity.
+
+```dotenv
+CRABRAG_OIDC_ISSUER=https://identity.example.com/tenant
+CRABRAG_OIDC_AUDIENCE=crabrag
+CRABRAG_OIDC_JWKS_URL=https://identity.example.com/tenant/.well-known/jwks.json
+CRABRAG_OIDC_ALGORITHMS=RS256
+```
+
+The enterprise permission adapter sends only subject, roles, groups, permission revision, and a generation summary. Timeouts, 5xx responses, invalid payloads, revision mismatches, and cross-generation document IDs fail closed.
+
+```dotenv
+CRABRAG_PERMISSION_PROVIDER=http
+CRABRAG_PERMISSION_URL=https://permissions.example.com/crabrag/check
+CRABRAG_PERMISSION_TIMEOUT_SECONDS=5
+```
+
+Model credentials resolve from environment variables first and the operating-system keyring second. Set `CRABRAG_API_KEY` for environment-based deployment, or save credentials from the administrator-only Settings page. Plaintext keys are never persisted to `data/model_api_settings.json`.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py rotate-token --grace-seconds 300
+.\.venv\Scripts\python.exe scripts\crabrag_admin.py audit-verify
+```
+
+Token rotation atomically updates `config/.env` without printing values. After restart, the new token is current and the previous token remains valid only through its UTC grace deadline. The audit under `data/audit/` uses sequence numbers, a SHA-256 hash chain, an atomic anchor, and `fsync`; it never records tokens, API keys, questions, answers, or document bodies.
 
 ## Fixed evaluation datasets and quality gates
 
