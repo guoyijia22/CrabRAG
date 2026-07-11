@@ -16,6 +16,7 @@ from services.rag_api.document.categories import get_category_names
 from services.rag_api.document import doc_status
 from services.rag_api.document.multi_vector import expand_multi_vector_chunks
 from services.rag_api.document.splitter import split_documents
+from services.rag_api.evaluation.approval import record_quality_approvals
 from services.rag_api.evaluation.profiles import build_evaluation_profiles, evaluation_collection_names, serialize_profile
 from services.rag_api.evaluation.quality import attach_quality_gates
 from services.rag_api.evaluation.questions import generate_evaluation_question_set
@@ -144,6 +145,7 @@ def _run_evaluation(
         "profiles": serialized_profiles,
         "summary": build_overall_summary(serialized_profiles, question_generation),
     }
+    result["approved_profiles"] = record_quality_approvals(result)
     saved = storage.save_evaluation_run(result)
     completed_units = total_units
     emit(status="completed", message="评测完成")

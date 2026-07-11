@@ -460,8 +460,15 @@ def get_rag_settings() -> RagSettings:
 
 @app.put("/api/settings", response_model=SettingsResponse)
 def update_rag_settings(settings: RagSettings) -> RagSettings:
+    from services.rag_api.evaluation.approval import require_strategy_approval
+
+    current = load_rag_settings()
     if not get_settings().use_local_models and settings.rerank_provider != "api":
         settings = settings.model_copy(update={"rerank_provider": "api"})
+    try:
+        require_strategy_approval(current, settings, index_generation.active_generation_id())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     payload = save_rag_settings(settings)
     try:
         from services.rag_api.llm.local_onnx_rerank import get_local_rerank_model

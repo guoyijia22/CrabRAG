@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from services.rag_api import config, main, rag_settings
+from services.rag_api.evaluation import approval
 from services.rag_api.main import app
 
 
@@ -21,6 +22,7 @@ def test_legacy_rag_settings_default_rerank_provider_api(tmp_path, monkeypatch):
 def test_settings_api_forces_api_rerank_provider_when_remote_models(tmp_path, monkeypatch):
     monkeypatch.setattr(rag_settings, "SETTINGS_PATH", tmp_path / "rag_settings.json")
     monkeypatch.setattr(main, "get_settings", lambda: config.Settings(use_local_models=False))
+    monkeypatch.setattr(approval, "require_strategy_approval", lambda *args: None)
     client = TestClient(app)
 
     current = client.get("/api/settings")
@@ -40,6 +42,7 @@ def test_settings_api_forces_api_rerank_provider_when_remote_models(tmp_path, mo
 def test_settings_api_preserves_rerank_model_when_local_models(tmp_path, monkeypatch):
     monkeypatch.setattr(rag_settings, "SETTINGS_PATH", tmp_path / "rag_settings.json")
     monkeypatch.setattr(main, "get_settings", lambda: config.Settings(use_local_models=True))
+    monkeypatch.setattr(approval, "require_strategy_approval", lambda *args: None)
     client = TestClient(app)
 
     payload = client.get("/api/settings").json()
