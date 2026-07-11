@@ -245,6 +245,8 @@ export interface ChatReference {
   text?: string;
   score?: number;
   document_id?: string;
+  document_version?: string;
+  publish_status?: string;
   chunk_id?: string;
   parent_chunk_id?: string;
   [key: string]: unknown;

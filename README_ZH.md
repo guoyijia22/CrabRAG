@@ -213,7 +213,7 @@ CrabRAG 使用双代索引原子发布。增量构建在独立 generation 中完
 
 ## 固定评测集与质量门禁
 
-将 `config/evaluation-dataset.example.json` 复制为 `config/evaluation-dataset.json`，再用当前治理索引中的稳定 `chunk_id`、`document_id` 和权限约束替换示例值。示例文件不能直接作为生产金标准。
+将 `config/evaluation-dataset.example.json` 复制为 `config/evaluation-dataset.json`，再用当前治理索引中的稳定 `chunk_id`、`document_id` 替换示例值。评测必须以待验证的真实主体、角色和用户组运行；ACL 泄漏由该请求的 PermissionProvider 实际允许集合判定，不读取题集自报白名单。示例文件不能直接作为生产金标准。
 
 评测记录会绑定数据集版本与 SHA-256、索引 generation、权限指纹和检索配置指纹，并统计 Recall@5、MRR@10、引用精确率、引用覆盖率、无证据回答率、ACL/失效内容泄漏率、P95 延迟和模型调用量。只有固定评测集中的候选配置满足以下门禁，设置页才能启用对应增强策略：
 

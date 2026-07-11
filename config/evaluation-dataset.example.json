@@ -12,9 +12,6 @@
       "expected_chunk_ids": [
         "synthetic-chunk-id"
       ],
-      "allowed_document_ids": [
-        "synthetic-public-document-id"
-      ],
       "retired_document_ids": [
         "synthetic-retired-document-id"
       ]
@@ -25,7 +22,6 @@
       "history": [],
       "expect_references": false,
       "expected_chunk_ids": [],
-      "allowed_document_ids": [],
       "retired_document_ids": []
     }
   ]

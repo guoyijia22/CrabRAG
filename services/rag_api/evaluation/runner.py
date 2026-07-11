@@ -128,11 +128,16 @@ def _run_evaluation(
         }
         serialized_profiles.append(payload)
     attach_baseline_deltas(serialized_profiles)
+    security_context = current_retrieval_context()
+    permission_bound = bool(
+        security_context
+        and security_context.generation_id != "legacy"
+        and security_context.allowed_document_ids is not None
+    )
     attach_quality_gates(
         serialized_profiles,
-        gate_eligible=bool(question_generation.get("gate_eligible", False)),
+        gate_eligible=bool(question_generation.get("gate_eligible", False)) and permission_bound,
     )
-    security_context = current_retrieval_context()
     generation_id = security_context.generation_id if security_context else "legacy"
     permission_fingerprint = security_context.permission_fingerprint if security_context else ""
     result = {
@@ -140,6 +145,7 @@ def _run_evaluation(
         "generation_id": generation_id,
         "subject": security_context.principal.subject if security_context else "anonymous",
         "permission_fingerprint": permission_fingerprint,
+        "permission_bound": permission_bound,
         "configuration_fingerprint": evaluation_configuration_fingerprint(
             generation_id=generation_id,
             permission_fingerprint=permission_fingerprint,
@@ -203,7 +209,7 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
     latency_ms = int((time.perf_counter() - started) * 1000)
     evaluated_query = result.get("effective_question") or question["question"]
     top_k = int(resolve_retrieval_top_k(evaluated_query, profile["settings"])["effective_top_k"])
-    references = result.get("references", [])[:top_k]
+    references = _annotate_governance(result.get("references", [])[:top_k])
     case = {
         "question_id": question["id"],
         "question": question["question"],
@@ -228,7 +234,6 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
             "expected_source_files": question.get("expected_source_files", []),
             "expected_document_ids": question.get("expected_document_ids", []),
             "expected_chunk_ids": question.get("expected_chunk_ids", []),
-            "allowed_document_ids": question.get("allowed_document_ids", []),
             "retired_document_ids": question.get("retired_document_ids", []),
             "forbidden_document_ids": question.get("forbidden_document_ids", []),
             "source_category": question.get("source_category", ""),
@@ -236,6 +241,30 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
     }
     case["metrics"] = score_case(case)
     return case
+
+
+def _annotate_governance(references: list[dict]) -> list[dict]:
+    context = current_retrieval_context()
+    if context is None or context.generation_id == "legacy" or context.allowed_document_ids is None:
+        return [dict(reference) for reference in references]
+    manifest = index_generation.load_generation_manifest(context.generation_id)
+    documents = manifest.get("documents") or {}
+    if not isinstance(documents, dict):
+        raise RuntimeError("评测无法读取活动 generation 文档清单")
+    allowed = context.allowed_document_ids
+    annotated: list[dict] = []
+    for reference in references:
+        item = dict(reference)
+        document_id = str(item.get("document_id") or "")
+        record = documents.get(document_id) if document_id else None
+        record = record if isinstance(record, dict) else None
+        expected_version = str((record or {}).get("document_version") or (record or {}).get("version") or "")
+        actual_version = str(item.get("document_version") or "")
+        item["acl_allowed"] = bool(document_id and document_id in allowed)
+        item["is_active"] = bool(record and expected_version and actual_version and expected_version == actual_version)
+        item["publish_status"] = str(item.get("publish_status") or ("published" if record else "inactive"))
+        annotated.append(item)
+    return annotated
 
 
 def _run_local_retrieval_case(state: dict, profile: dict) -> dict:

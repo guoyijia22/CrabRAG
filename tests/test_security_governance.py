@@ -136,6 +136,7 @@ def test_vector_search_applies_allowed_document_filter_before_query(monkeypatch)
                     "document_version": "2",
                     "chunk_id": "doc-a::chunk::hash::001",
                     "parent_chunk_id": "doc-a::parent",
+                    "publish_status": "published",
                     "effective_at": "2026-01-01T00:00:00Z",
                 }]],
                 "distances": [[0.1]],
@@ -158,6 +159,7 @@ def test_vector_search_applies_allowed_document_filter_before_query(monkeypatch)
     assert results[0]["document_version"] == "2"
     assert results[0]["chunk_id"] == "doc-a::chunk::hash::001"
     assert results[0]["parent_chunk_id"] == "doc-a::parent"
+    assert results[0]["publish_status"] == "published"
     assert results[0]["index_generation"] == "gen-2"
 
 

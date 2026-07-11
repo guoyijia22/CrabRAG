@@ -213,7 +213,7 @@ The local identity adapter reads `CRABRAG_SUBJECT`, `CRABRAG_ROLES`, `CRABRAG_GR
 
 ## Fixed evaluation datasets and quality gates
 
-Copy `config/evaluation-dataset.example.json` to `config/evaluation-dataset.json`, then replace every example value with reviewed stable `chunk_id`, `document_id`, and permission constraints from the active governed index. The shipped example is not a production gold set.
+Copy `config/evaluation-dataset.example.json` to `config/evaluation-dataset.json`, then replace every example value with reviewed stable `chunk_id` and `document_id` values from the active governed index. Run the evaluation as the real subject, roles, and groups being verified: ACL leakage is checked against the PermissionProvider result for that request, never a dataset-declared allowlist. The shipped example is not a production gold set.
 
 Evaluation results bind the dataset version and SHA-256 to the index generation, permission fingerprint, and retrieval-configuration fingerprint. They report Recall@5, MRR@10, citation precision and coverage, no-evidence answer rate, ACL/inactive-content leakage, P95 latency, and model calls. A candidate can be enabled in Settings only after a fixed dataset proves that:
 

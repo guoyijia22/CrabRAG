@@ -153,8 +153,9 @@ def _reciprocal_rank(relevance: list[bool]) -> float:
 
 def _is_acl_leak(reference: dict, expected: dict) -> bool:
     metadata = reference.get("metadata") or {}
-    if any(reference.get(field, metadata.get(field)) is False for field in ("acl_allowed", "permission_allowed", "authorized")):
-        return True
+    decisions = [reference.get(field, metadata.get(field)) for field in ("acl_allowed", "permission_allowed", "authorized")]
+    if any(isinstance(value, bool) for value in decisions):
+        return any(value is False for value in decisions)
     if "allowed_document_ids" not in expected:
         return False
     document_id = str(reference.get("document_id") or metadata.get("document_id") or "")
@@ -163,11 +164,20 @@ def _is_acl_leak(reference: dict, expected: dict) -> bool:
 
 def _is_invalid_content(reference: dict, expected: dict) -> bool:
     metadata = reference.get("metadata") or {}
-    if any(reference.get(field, metadata.get(field)) is False for field in ("is_active", "is_valid")):
+    validity = [reference.get(field, metadata.get(field)) for field in ("is_active", "is_valid")]
+    if any(value is False for value in validity):
         return True
-    status = str(reference.get("status") or metadata.get("status") or "").lower()
+    status = str(
+        reference.get("publish_status")
+        or metadata.get("publish_status")
+        or reference.get("status")
+        or metadata.get("status")
+        or ""
+    ).lower()
     if status in _INACTIVE_STATUSES:
         return True
+    if any(value is True for value in validity):
+        return False
     document_id = str(reference.get("document_id") or metadata.get("document_id") or "")
     forbidden = _string_values(expected.get("retired_document_ids")) | _string_values(expected.get("forbidden_document_ids"))
     return bool(document_id and document_id in forbidden)

@@ -475,6 +475,7 @@ def _chunk_payload(doc: str, meta: dict, score: float, channel: str) -> dict:
         "parent_chunk_id": meta.get("parent_chunk_id", ""),
         "document_id": meta.get("document_id", meta.get("doc_id", "")),
         "document_version": meta.get("document_version", ""),
+        "publish_status": meta.get("publish_status", ""),
         "effective_at": meta.get("effective_at", ""),
         "updated_at": meta.get("updated_at", ""),
         "acl_revision": meta.get("acl_revision", ""),

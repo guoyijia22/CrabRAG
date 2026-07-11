@@ -327,12 +327,14 @@ def test_quality_metrics_match_stable_chunk_ids_and_dataset_leakage_constraints(
 
 
 def test_evaluation_case_preserves_dataset_identity_and_leakage_constraints(monkeypatch):
+    from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
+
     profile = {"id": "baseline", "settings": RagSettings(), "collection_name": None}
     question = {
         "id": "case-1",
         "question": "测试问题",
         "expected_chunk_ids": ["chunk-a"],
-        "allowed_document_ids": ["doc-a"],
+        "allowed_document_ids": ["doc-malicious"],
         "retired_document_ids": ["doc-old"],
     }
     monkeypatch.setattr(
@@ -341,15 +343,62 @@ def test_evaluation_case_preserves_dataset_identity_and_leakage_constraints(monk
         lambda state: {
             **state,
             "answer": "answer",
-            "references": [{"chunk_id": "chunk-a", "document_id": "doc-a"}],
+            "references": [
+                {"chunk_id": "chunk-a", "document_id": "doc-a", "document_version": "1"},
+                {"chunk_id": "chunk-x", "document_id": "doc-restricted", "document_version": "1"},
+            ],
             "relation_paths": [],
             "error": None,
         },
     )
     monkeypatch.setattr(runner, "get_settings", lambda: type("Settings", (), {"use_local_models": False})())
+    monkeypatch.setattr(
+        runner.index_generation,
+        "load_generation_manifest",
+        lambda generation_id: {
+            "generation_id": generation_id,
+            "documents": {"doc-a": {"document_version": "1"}},
+        },
+    )
+    context = RetrievalContext(
+        generation_id="gen-1",
+        principal=PrincipalContext(subject="user-a", roles=(), groups=(), permission_revision="1"),
+        allowed_document_ids=frozenset({"doc-a"}),
+        permission_fingerprint="permission-1",
+    )
 
-    case = runner._run_case("eval-1", profile, question)
+    with use_retrieval_context(context):
+        case = runner._run_case("eval-1", profile, question)
 
     assert case["expected"]["expected_chunk_ids"] == ["chunk-a"]
-    assert case["expected"]["allowed_document_ids"] == ["doc-a"]
     assert case["expected"]["retired_document_ids"] == ["doc-old"]
+    assert case["references"][0]["acl_allowed"] is True
+    assert case["references"][0]["is_active"] is True
+    assert case["references"][1]["acl_allowed"] is False
+    assert case["references"][1]["is_active"] is False
+
+
+def test_governed_reference_version_mismatch_is_inactive_even_when_document_id_exists(monkeypatch):
+    from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
+
+    context = RetrievalContext(
+        generation_id="gen-1",
+        principal=PrincipalContext.anonymous(),
+        allowed_document_ids=frozenset({"doc-a"}),
+        permission_fingerprint="permission-1",
+    )
+    monkeypatch.setattr(
+        runner.index_generation,
+        "load_generation_manifest",
+        lambda generation_id: {"generation_id": generation_id, "documents": {"doc-a": {"document_version": "2"}}},
+    )
+    references = [{"document_id": "doc-a", "document_version": "1", "publish_status": "published"}]
+
+    with use_retrieval_context(context):
+        annotated = runner._annotate_governance(references)
+
+    assert annotated[0]["acl_allowed"] is True
+    assert annotated[0]["is_active"] is False
+    assert calculate_quality_metrics([{"expected": {"expect_references": True}, "references": annotated}])[
+        "invalid_content_leakage_rate"
+    ] == 1.0
