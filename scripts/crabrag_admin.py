@@ -551,15 +551,31 @@ def _process_runtime_info(pid: int) -> dict[str, object]:
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
             return {}
         return payload if isinstance(payload, dict) else {}
-    proc = Path("/proc") / str(pid)
+    return _read_proc_runtime_info(pid)
+
+
+def _read_proc_runtime_info(
+    pid: int,
+    *,
+    proc_root: Path = Path("/proc"),
+    read_link: Callable[[Path], Path] = lambda path: path.resolve(),
+) -> dict[str, object]:
+    proc = proc_root / str(pid)
     try:
         command_line = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-        executable = str((proc / "exe").resolve())
+        executable = str(read_link(proc / "exe"))
+        cwd = str(read_link(proc / "cwd"))
         stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
         start_identity = stat_fields[19]
     except (OSError, IndexError):
         return {}
-    return {"command_line": command_line, "executable": executable, "start_identity": start_identity, "ports": []}
+    return {
+        "command_line": command_line,
+        "executable": executable,
+        "cwd": cwd,
+        "start_identity": start_identity,
+        "ports": [],
+    }
 
 
 def _run_state_process_matches(item: object, project_root: Path, ports: list[int]) -> bool:
@@ -582,10 +598,20 @@ def _run_state_process_matches(item: object, project_root: Path, ports: list[int
         return False
     owned_ports = info.get("ports") if isinstance(info.get("ports"), list) else []
     owns_configured_port = bool(owned_ports) and any(port in ports for port in owned_ports)
+    cwd_matches = False
+    if info.get("cwd"):
+        try:
+            cwd_matches = Path(str(info["cwd"])).resolve() == project_root.resolve()
+        except OSError:
+            cwd_matches = False
     try:
         Path(executable).resolve().relative_to(project_root.resolve())
     except ValueError:
-        if str(project_root.resolve()).casefold() not in command_line.casefold() and not owns_configured_port:
+        if (
+            str(project_root.resolve()).casefold() not in command_line.casefold()
+            and not owns_configured_port
+            and not cwd_matches
+        ):
             return False
     if owned_ports and not any(port in ports for port in owned_ports):
         return False

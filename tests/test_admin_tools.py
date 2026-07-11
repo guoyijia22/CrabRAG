@@ -433,6 +433,49 @@ def test_global_bun_web_process_is_trusted_by_identity_role_and_owned_custom_por
     assert crabrag_admin._run_state_process_matches(item, root, [3103, 8101]) is True
 
 
+def test_linux_proc_runtime_info_includes_process_cwd(tmp_path: Path):
+    from scripts import crabrag_admin
+
+    proc_root = tmp_path / "proc"
+    process_dir = proc_root / "456"
+    process_dir.mkdir(parents=True)
+    (process_dir / "cmdline").write_bytes(b"/usr/bin/bun\0server/gateway.js\0")
+    stat_fields = ["S", *(["0"] * 18), "start-linux", *(["0"] * 8)]
+    (process_dir / "stat").write_text(f"456 (bun) {' '.join(stat_fields)}", encoding="utf-8")
+    project_root = tmp_path / "CrabRAG"
+
+    info = crabrag_admin._read_proc_runtime_info(
+        456,
+        proc_root=proc_root,
+        read_link=lambda path: Path("/usr/bin/bun") if path.name == "exe" else project_root,
+    )
+
+    assert info["command_line"] == "/usr/bin/bun server/gateway.js "
+    assert info["start_identity"] == "start-linux"
+    assert info["cwd"] == str(project_root)
+
+
+def test_linux_global_bun_relative_gateway_is_trusted_when_cwd_matches_project(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    item = {"pid": 456, "role": "web", "start_identity": "start-linux"}
+    monkeypatch.setattr(crabrag_admin, "_process_is_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        crabrag_admin,
+        "_process_runtime_info",
+        lambda _pid: {
+            "command_line": "/usr/bin/bun server/gateway.js",
+            "executable": "/usr/bin/bun",
+            "cwd": str(root.resolve()),
+            "start_identity": "start-linux",
+            "ports": [],
+        },
+    )
+
+    assert crabrag_admin._run_state_process_matches(item, root, [3103, 8101]) is True
+
+
 def test_backup_rejects_reparse_point_in_protected_source_ancestor(tmp_path: Path, monkeypatch):
     from scripts import crabrag_admin
 
