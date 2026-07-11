@@ -7,6 +7,7 @@ import requests
 
 from services.rag_api.agent.prompts import detect_prompt_language
 from services.rag_api.config import get_settings
+from services.rag_api.llm.call_metrics import record_model_call
 from services.rag_api.llm.siliconflow_client import chat_completion
 from services.rag_api.rag_settings import RagSettings
 
@@ -83,6 +84,7 @@ def apply_rerank(query: str, chunks: list[dict], settings: RagSettings, top_k: i
     trace = {"enabled": settings.rerank_enabled, "provider": settings.rerank_provider, "fallback": False, "candidate_count": len(chunks)}
     if not settings.rerank_enabled or not chunks:
         return chunks[:top_k], trace
+    record_model_call("rerank", input_count=len(chunks))
     if settings.rerank_provider == "local_onnx":
         return _apply_local_rerank(query, chunks, top_k, trace)
     app_settings = get_settings()

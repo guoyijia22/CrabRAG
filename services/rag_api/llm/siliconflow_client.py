@@ -7,6 +7,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from services.rag_api.config import get_settings
 from services.rag_api.exceptions import LLMServiceError
+from services.rag_api.llm.call_metrics import record_model_call
 
 
 @lru_cache(maxsize=1)
@@ -38,6 +39,7 @@ def _translate_error(exc: Exception) -> LLMServiceError:
 
 
 def chat_completion(messages: list[dict[str, str]], temperature: float = 0.1, max_tokens: int = 1200) -> str:
+    record_model_call("chat")
     settings = get_settings()
     if settings.use_local_models:
         try:
@@ -66,6 +68,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     settings = get_settings()
     if not texts:
         return []
+    record_model_call("embedding", input_count=len(texts))
     if settings.embedding_provider == "local_onnx":
         try:
             local_onnx_embedding = _local_onnx_embedding_module()
