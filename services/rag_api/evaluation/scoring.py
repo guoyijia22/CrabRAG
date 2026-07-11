@@ -3,6 +3,7 @@ from __future__ import annotations
 from statistics import mean
 
 from services.rag_api.app_settings import DEFAULT_NO_MATCH_RESPONSE, load_app_settings
+from services.rag_api.evaluation.quality import calculate_quality_metrics
 
 QUALITY_WEIGHTS = {
     "success_rate": 0.30,
@@ -79,6 +80,7 @@ def score_profile(profile_id: str, cases: list[dict]) -> dict:
             "graph_path_coverage": 0,
             "fallback_correct_rate": 0,
             "quality_score": 0,
+            **calculate_quality_metrics([]),
         }
     trace_activations: dict[str, int] = {}
     trace_fallbacks: dict[str, int] = {}
@@ -104,6 +106,7 @@ def score_profile(profile_id: str, cases: list[dict]) -> dict:
         "source_hit_rate": round(sum(1 for item in metrics if item.get("source_hit")) / count, 4),
         "graph_path_coverage": round(sum(1 for item in metrics if item.get("graph_path_hit")) / count, 4),
         "fallback_correct_rate": round(sum(1 for item in metrics if item.get("fallback_correct")) / count, 4),
+        **calculate_quality_metrics(cases),
     }
     summary["quality_score"] = _quality_score(summary)
     return summary

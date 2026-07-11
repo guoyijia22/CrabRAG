@@ -17,9 +17,11 @@ from services.rag_api.document import doc_status
 from services.rag_api.document.multi_vector import expand_multi_vector_chunks
 from services.rag_api.document.splitter import split_documents
 from services.rag_api.evaluation.profiles import build_evaluation_profiles, evaluation_collection_names, serialize_profile
+from services.rag_api.evaluation.quality import attach_quality_gates
 from services.rag_api.evaluation.questions import generate_evaluation_question_set
 from services.rag_api.evaluation.scoring import attach_baseline_deltas, build_overall_summary, score_case, score_profile
 from services.rag_api.evaluation import storage
+from services.rag_api.llm.call_metrics import capture_model_calls
 from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, override_rag_settings
 from services.rag_api.vector.chroma_store import add_chunks, collection_status, override_collection_name
 from services.rag_api import index_generation
@@ -124,6 +126,10 @@ def _run_evaluation(
         }
         serialized_profiles.append(payload)
     attach_baseline_deltas(serialized_profiles)
+    attach_quality_gates(
+        serialized_profiles,
+        gate_eligible=bool(question_generation.get("gate_eligible", False)),
+    )
     security_context = current_retrieval_context()
     result = {
         "run_id": run_id,
@@ -171,16 +177,18 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
     session_id = f"{run_id}:{profile['id']}:{question['id']}"
     state = {"session_id": session_id, "question": question["question"], "history": question.get("history", []), "trace": []}
     started = time.perf_counter()
-    try:
-        with override_rag_settings(profile["settings"]), override_collection_name(_evaluation_collection_name(profile)):
-            if get_settings().use_local_models:
-                result = _run_local_retrieval_case(state, profile)
-            else:
-                result = run_qa(state)
-        error = result.get("error")
-    except Exception as exc:  # noqa: BLE001
-        result = {"answer": "", "references": [], "trace": [], "relation_paths": [], "error": str(exc)}
-        error = str(exc)
+    with capture_model_calls() as model_calls:
+        try:
+            with override_rag_settings(profile["settings"]), override_collection_name(_evaluation_collection_name(profile)):
+                if get_settings().use_local_models:
+                    result = _run_local_retrieval_case(state, profile)
+                else:
+                    result = run_qa(state)
+            error = result.get("error")
+        except Exception as exc:  # noqa: BLE001
+            result = {"answer": "", "references": [], "trace": [], "relation_paths": [], "error": str(exc)}
+            error = str(exc)
+    model_call_snapshot = model_calls.snapshot()
     latency_ms = int((time.perf_counter() - started) * 1000)
     top_k = get_retrieval_top_k(profile["settings"])
     references = result.get("references", [])[:top_k]
@@ -197,6 +205,8 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
         "relation_paths": result.get("relation_paths", [])[:top_k],
         "trace": result.get("trace", []),
         "latency_ms": latency_ms,
+        "model_call_count": model_call_snapshot["total_calls"],
+        "model_calls": model_call_snapshot,
         "error": error,
         "expected": {
             "expected_intent": question.get("expected_intent", ""),
@@ -204,6 +214,7 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
             "expect_references": question.get("expect_references", True),
             "expect_relation_paths": question.get("expect_relation_paths", False),
             "expected_source_files": question.get("expected_source_files", []),
+            "expected_document_ids": question.get("expected_document_ids", []),
             "source_category": question.get("source_category", ""),
         },
     }

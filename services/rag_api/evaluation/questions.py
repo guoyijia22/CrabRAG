@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from services.rag_api.document.categories import DEFAULT_CATEGORIES, load_kb_categories
+from services.rag_api.evaluation.dataset import dataset_to_question_set, load_evaluation_dataset
 from services.rag_api.graph.relations import RELATIONS
 from services.rag_api.llm.siliconflow_client import chat_completion
 from services.rag_api.vector.chroma_store import search_all_chunks
@@ -16,6 +17,10 @@ MAX_QUESTIONS = 14
 
 def generate_evaluation_question_set() -> dict[str, Any]:
     """Generate a reproducible evaluation question set for the current KB."""
+
+    fixed_dataset = load_evaluation_dataset()
+    if fixed_dataset is not None:
+        return dataset_to_question_set(fixed_dataset)
 
     category_payload = load_kb_categories()
     chunks = _load_sample_chunks()
@@ -252,6 +257,8 @@ def _payload(mode: str, questions: list[dict[str, Any]], category_payload: dict[
     return {
         "question_generation": {
             "mode": mode,
+            "fixed": False,
+            "gate_eligible": False,
             "category_count": len(category_payload.get("items", []) or []),
             "question_count": len(questions),
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
