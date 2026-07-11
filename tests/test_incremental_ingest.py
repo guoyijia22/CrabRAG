@@ -627,6 +627,56 @@ def test_pipeline_fingerprint_includes_chunk_identity_schema_version(tmp_path, m
     assert first != second
 
 
+def test_embedding_fingerprint_includes_api_endpoint(tmp_path):
+    from services.rag_api.document import doc_status
+
+    first_settings = _settings(tmp_path / "docs", tmp_path).model_copy(
+        update={"embedding_base_url": "https://embedding-a.example/v1"}
+    )
+    second_settings = first_settings.model_copy(
+        update={"embedding_base_url": "https://embedding-b.example/v1"}
+    )
+
+    assert doc_status.embedding_fingerprint(first_settings) != doc_status.embedding_fingerprint(second_settings)
+
+
+def test_embedding_fingerprint_changes_when_local_model_artifact_changes(tmp_path):
+    from services.rag_api.document import doc_status
+
+    model_dir = tmp_path / "embedding-model"
+    model_dir.mkdir()
+    for name, content in {
+        "model.onnx": b"model-v1",
+        "config.json": b"{}",
+        "tokenizer.json": b"{}",
+        "tokenizer_config.json": b"{}",
+    }.items():
+        (model_dir / name).write_bytes(content)
+    settings = _settings(tmp_path / "docs", tmp_path).model_copy(
+        update={
+            "embedding_provider": "local_onnx",
+            "local_embedding_model_dir": model_dir,
+            "embedding_onnx_model_file": "model.onnx",
+        }
+    )
+    first = doc_status.embedding_fingerprint(settings)
+
+    (model_dir / "tokenizer.json").write_bytes(b'{"version": 2}')
+    second = doc_status.embedding_fingerprint(settings)
+
+    assert first != second
+
+
+def test_ingest_rejects_text_and_graph_embedding_dimension_mismatch():
+    from services.rag_api.document.ingest import _validate_index_dimensions
+
+    with pytest.raises(RuntimeError, match="维度"):
+        _validate_index_dimensions(
+            {"embedding_dimension": 1024},
+            {"graph_embedding_dimension": 768},
+        )
+
+
 def test_tombstones_are_retained_for_thirty_days():
     from datetime import datetime, timezone
 

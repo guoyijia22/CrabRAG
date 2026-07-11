@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -68,9 +69,7 @@ def pipeline_fingerprint(settings: Settings, rag_settings: RagSettings) -> str:
         "chunk_size": rag_settings.chunk_size,
         "chunk_overlap": rag_settings.chunk_overlap,
         "multi_vector_enabled": rag_settings.multi_vector_enabled,
-        "embedding_provider": settings.embedding_provider,
-        "embedding_model": settings.embedding_model,
-        "embedding_onnx_model_file": settings.embedding_onnx_model_file,
+        "embedding_fingerprint": embedding_fingerprint(settings),
         "collection_name": settings.collection_name,
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -82,9 +81,46 @@ def embedding_fingerprint(settings: Settings) -> str:
         "embedding_provider": settings.embedding_provider,
         "embedding_model": settings.embedding_model,
         "embedding_onnx_model_file": settings.embedding_onnx_model_file,
+        "embedding_base_url": str(settings.embedding_base_url).rstrip("/"),
+        "embedding_openai_compatible": bool(settings.embedding_openai_compatible),
     }
+    if settings.embedding_provider == "local_onnx":
+        payload["local_artifacts"] = _local_embedding_artifacts(settings)
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _local_embedding_artifacts(settings: Settings) -> dict[str, str]:
+    model_dir = Path(settings.local_embedding_model_dir)
+    model_candidates = [
+        model_dir / settings.embedding_onnx_model_file,
+        model_dir / "onnx" / settings.embedding_onnx_model_file,
+    ]
+    model_path = next((path for path in model_candidates if path.is_file()), model_candidates[0])
+    paths = [
+        model_path,
+        model_dir / "config.json",
+        model_dir / "tokenizer.json",
+        model_dir / "tokenizer_config.json",
+    ]
+    missing = [str(path) for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"本地向量模型文件缺失：{', '.join(missing)}")
+    artifacts: dict[str, str] = {}
+    for path in paths:
+        stat = path.stat()
+        artifacts[path.relative_to(model_dir).as_posix()] = _cached_artifact_hash(
+            str(path.resolve()),
+            stat.st_size,
+            stat.st_mtime_ns,
+        )
+    return artifacts
+
+
+@lru_cache(maxsize=64)
+def _cached_artifact_hash(path: str, size: int, mtime_ns: int) -> str:
+    del size, mtime_ns
+    return hash_file(Path(path))
 
 
 def load_snapshot(doc_id: str, directory: Path | None = None) -> dict[str, Any] | None:

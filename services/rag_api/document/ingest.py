@@ -232,6 +232,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
         generation_id,
         full_rebuild=full_rebuild,
     )
+    _validate_index_dimensions(vector_stats, graph_index_stats)
     progress(
         6 + vector_batch_units,
         "生成图谱索引",
@@ -368,6 +369,15 @@ def _retained_tombstones(tombstones: list[dict[str, Any]], cutoff: datetime) -> 
         if deleted_at.tzinfo is not None and deleted_at.astimezone(timezone.utc) >= threshold:
             retained.append(tombstone)
     return retained
+
+
+def _validate_index_dimensions(vector_stats: dict[str, Any], graph_stats: dict[str, Any]) -> None:
+    text_dimension = int(vector_stats.get("embedding_dimension") or 0)
+    graph_dimension = int(graph_stats.get("graph_embedding_dimension") or 0)
+    if text_dimension and graph_dimension and text_dimension != graph_dimension:
+        raise RuntimeError(
+            f"文本与图谱 embedding 维度不一致：text={text_dimension}, graph={graph_dimension}"
+        )
 
 
 if __name__ == "__main__":

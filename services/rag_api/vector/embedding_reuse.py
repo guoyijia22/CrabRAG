@@ -7,6 +7,15 @@ from typing import Any
 REUSE_PAGE_SIZE = 512
 
 
+def update_embedding_dimension(current: int, embedding: list[float]) -> int:
+    dimension = len(embedding)
+    if dimension <= 0:
+        raise RuntimeError("向量模型返回了空 embedding")
+    if current and current != dimension:
+        raise RuntimeError(f"embedding 维度不一致：expected={current}, actual={dimension}")
+    return dimension
+
+
 def iter_matching_embeddings(
     client,
     source_names: list[str],

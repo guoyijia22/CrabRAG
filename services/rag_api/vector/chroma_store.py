@@ -17,7 +17,7 @@ from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.rag_settings import load_rag_settings
 from services.rag_api import index_generation
 from services.rag_api.security import current_retrieval_context
-from services.rag_api.vector.embedding_reuse import iter_matching_embeddings
+from services.rag_api.vector.embedding_reuse import iter_matching_embeddings, update_embedding_dimension
 
 EMBEDDING_BATCH_SIZE = 64
 _COLLECTION_OVERRIDE: ContextVar[str | None] = ContextVar("collection_name_override", default=None)
@@ -47,9 +47,24 @@ def add_chunks(
 ) -> int:
     collection = reset_collection(collection_metadata)
     if not chunks:
+        collection.modify(
+            metadata={
+                **(collection_metadata or {}),
+                "embedding_dimension": 0,
+            }
+        )
         return 0
     documents = [chunk["content"] for chunk in chunks]
     embeddings = _embed_in_batches(documents, progress_callback=progress_callback)
+    embedding_dimension = 0
+    for embedding in embeddings:
+        embedding_dimension = update_embedding_dimension(embedding_dimension, embedding)
+    collection.modify(
+        metadata={
+            **(collection_metadata or {}),
+            "embedding_dimension": embedding_dimension,
+        }
+    )
     ids = [chunk["id"] for chunk in chunks]
     metadatas = [chunk["metadata"] for chunk in chunks]
     client = _get_chroma_client()
@@ -117,6 +132,7 @@ def build_generation_chunks(
     write_embeddings: list[list[float]] = []
     write_metadatas: list[dict[str, Any]] = []
     write_batch_size = max(1, min(512, int(client.get_max_batch_size())))
+    embedding_dimension = 0
 
     def flush() -> None:
         if not write_ids:
@@ -133,6 +149,8 @@ def build_generation_chunks(
         write_metadatas.clear()
 
     def queue(group: list[dict], embedding: list[float]) -> None:
+        nonlocal embedding_dimension
+        embedding_dimension = update_embedding_dimension(embedding_dimension, embedding)
         for chunk in group:
             write_ids.append(str(chunk["id"]))
             write_documents.append(str(chunk["content"]))
@@ -170,12 +188,22 @@ def build_generation_chunks(
                 }
             )
     flush()
+    collection_embedding_fingerprint = str(
+        chunks[0].get("metadata", {}).get("embedding_fingerprint") or ""
+    ) if chunks else ""
+    target.modify(
+        metadata={
+            "embedding_fingerprint": collection_embedding_fingerprint,
+            "embedding_dimension": embedding_dimension,
+        }
+    )
     if target.count() != len(chunks):
         raise RuntimeError(f"索引代写入数量不一致：expected={len(chunks)}, actual={target.count()}")
     return {
         "chunk_count": len(chunks),
         "reused_embedding_count": len(chunks) - total_missing,
         "embedded_chunk_count": total_missing,
+        "embedding_dimension": embedding_dimension,
     }
 
 
@@ -245,6 +273,7 @@ def validate_generation_collections(generation_id: str, manifest: dict[str, Any]
         "graph_entity": int(stats.get("graph_entity_index_count") or 0),
         "graph_relationship": int(stats.get("graph_relationship_index_count") or 0),
     }
+    expected_dimension = int(stats.get("embedding_dimension") or 0)
     for kind, expected in expected_counts.items():
         name = index_generation.generation_collection_name(base, generation_id, kind)
         try:
@@ -254,6 +283,13 @@ def validate_generation_collections(generation_id: str, manifest: dict[str, Any]
         actual = int(collection.count())
         if actual != expected:
             raise ValueError(f"索引代集合数量不一致：{name}, expected={expected}, actual={actual}")
+        if expected > 0 and expected_dimension:
+            metadata = getattr(collection, "metadata", None) or {}
+            actual_dimension = int(metadata.get("embedding_dimension") or 0)
+            if actual_dimension != expected_dimension:
+                raise ValueError(
+                    f"索引代集合维度不一致：{name}, expected={expected_dimension}, actual={actual_dimension}"
+                )
 
 
 @contextmanager
@@ -309,6 +345,7 @@ def search_chunks(query: str, intent: str, entities: list[str] | None = None, to
     if collection.count() == 0:
         return []
     query_embedding = embed_texts([query])[0]
+    _validate_query_embedding_dimension(collection, query_embedding)
     query_kwargs: dict[str, Any] = {
         "query_embeddings": [query_embedding],
         "n_results": max(candidate_k, top_k),
@@ -396,6 +433,15 @@ def _metadata_allowed(metadata: dict[str, Any], allowed_document_ids: frozenset[
         return True
     document_id = str(metadata.get("document_id") or metadata.get("doc_id") or "")
     return document_id in allowed_document_ids
+
+
+def _validate_query_embedding_dimension(collection, embedding: list[float]) -> None:
+    metadata = getattr(collection, "metadata", None) or {}
+    expected = int(metadata.get("embedding_dimension") or 0)
+    if expected and len(embedding) != expected:
+        raise RuntimeError(
+            f"向量模型维度已变化：index={expected}, query={len(embedding)}；请执行全量重建"
+        )
 
 
 def _entity_match_score(text: str, entities: list[str]) -> float:

@@ -95,12 +95,18 @@ def test_build_generation_reuses_matching_embedding_and_only_embeds_changed_chun
 
     stats = chroma_store.build_generation_chunks(chunks, "gen-2")
 
-    assert stats == {"chunk_count": 2, "reused_embedding_count": 1, "embedded_chunk_count": 1}
+    assert stats == {
+        "chunk_count": 2,
+        "reused_embedding_count": 1,
+        "embedded_chunk_count": 1,
+        "embedding_dimension": 2,
+    }
     assert embedded_batches == [["changed"]]
     target = fake_client.collections["kb__text__gen-2"]
     assert target.records["new-a"]["embedding"] == [1.0, 2.0]
     assert target.records["new-b"]["embedding"] == [9.0, 9.0]
     assert target.records["new-a"]["metadata"]["generation_id"] == "gen-2"
+    assert target.metadata["embedding_dimension"] == 2
 
 
 def test_build_generation_does_not_reuse_unknown_fingerprint_and_embeds_duplicate_text_once(tmp_path, monkeypatch):
@@ -132,8 +138,104 @@ def test_build_generation_does_not_reuse_unknown_fingerprint_and_embeds_duplicat
 
     stats = chroma_store.build_generation_chunks(chunks, "gen-2")
 
-    assert stats == {"chunk_count": 2, "reused_embedding_count": 1, "embedded_chunk_count": 1}
+    assert stats == {
+        "chunk_count": 2,
+        "reused_embedding_count": 1,
+        "embedded_chunk_count": 1,
+        "embedding_dimension": 2,
+    }
     assert embedded_batches == [["same"]]
+
+
+def test_build_generation_rejects_mixed_embedding_dimensions(tmp_path, monkeypatch):
+    from services.rag_api.vector import chroma_store
+
+    index_generation = _configure_generation_paths(tmp_path, monkeypatch)
+    fake_client = _FakeClient()
+    settings = type("Settings", (), {"collection_name": "kb", "embedding_provider": "api", "chroma_dir": tmp_path / "chroma"})()
+    monkeypatch.setattr(chroma_store, "_get_chroma_client", lambda: fake_client)
+    monkeypatch.setattr(chroma_store, "get_settings", lambda: settings)
+    monkeypatch.setattr(chroma_store, "embed_texts", lambda texts: [[9.0, 9.0, 9.0] for _ in texts])
+    index_generation.publish_generation("gen-1", {"permission_schema_version": 1})
+    source = fake_client.get_or_create_collection("kb__text__gen-1")
+    source.upsert(
+        ids=["old-a"],
+        documents=["unchanged"],
+        embeddings=[[1.0, 2.0]],
+        metadatas=[{"chunk_hash": "hash-a", "granularity": "chunk", "embedding_fingerprint": "embed-v1"}],
+    )
+    chunks = [
+        {
+            "id": "new-a",
+            "content": "unchanged",
+            "metadata": {"chunk_hash": "hash-a", "granularity": "chunk", "embedding_fingerprint": "embed-v1"},
+        },
+        {
+            "id": "new-b",
+            "content": "changed",
+            "metadata": {"chunk_hash": "hash-b", "granularity": "chunk", "embedding_fingerprint": "embed-v1"},
+        },
+    ]
+
+    with pytest.raises(RuntimeError, match="维度"):
+        chroma_store.build_generation_chunks(chunks, "gen-2")
+
+
+def test_vector_search_rejects_query_embedding_dimension_change(monkeypatch):
+    from services.rag_api.vector import chroma_store
+
+    class Collection:
+        metadata = {"embedding_dimension": 2}
+
+        def count(self):
+            return 1
+
+        def query(self, **kwargs):
+            raise AssertionError("dimension mismatch must be rejected before Chroma query")
+
+    monkeypatch.setattr(chroma_store, "get_collection", lambda: Collection())
+    monkeypatch.setattr(chroma_store, "embed_texts", lambda texts: [[1.0, 2.0, 3.0]])
+
+    with pytest.raises(RuntimeError, match="全量重建"):
+        chroma_store.search_chunks("query", "intent")
+
+
+def test_generation_validation_rejects_collection_dimension_mismatch(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.vector import chroma_store
+
+    fake_client = _FakeClient()
+    settings = type("Settings", (), {"collection_name": "kb"})()
+    monkeypatch.setattr(chroma_store, "_get_chroma_client", lambda: fake_client)
+    monkeypatch.setattr(chroma_store, "get_settings", lambda: settings)
+    for kind, count, dimension in (
+        ("text", 1, 2),
+        ("graph_entity", 1, 3),
+        ("graph_relationship", 0, 0),
+    ):
+        collection = fake_client.get_or_create_collection(
+            index_generation.generation_collection_name("kb", "gen-1", kind),
+            metadata={"embedding_dimension": dimension},
+        )
+        for index in range(count):
+            collection.upsert(
+                ids=[f"{kind}-{index}"],
+                documents=[kind],
+                embeddings=[[1.0] * max(1, dimension)],
+                metadatas=[{}],
+            )
+
+    manifest = {
+        "stats": {
+            "chunk_count": 1,
+            "graph_entity_index_count": 1,
+            "graph_relationship_index_count": 0,
+            "embedding_dimension": 2,
+        }
+    }
+
+    with pytest.raises(ValueError, match="维度"):
+        chroma_store.validate_generation_collections("gen-1", manifest)
 
 
 def test_build_generation_pages_reusable_embeddings_instead_of_loading_all(tmp_path, monkeypatch):
@@ -186,10 +288,14 @@ def test_add_chunks_resets_empty_collection_and_preserves_build_metadata(monkeyp
     from services.rag_api.vector import chroma_store
 
     captured = []
+    modified = []
 
     class Collection:
         def add(self, **kwargs):
             raise AssertionError("empty collection must not add records")
+
+        def modify(self, *, metadata=None, name=None):
+            modified.append(metadata)
 
     monkeypatch.setattr(
         chroma_store,
@@ -201,6 +307,12 @@ def test_add_chunks_resets_empty_collection_and_preserves_build_metadata(monkeyp
 
     assert count == 0
     assert captured == [{"evaluation_fingerprint": "eval-v1"}]
+    assert modified == [
+        {
+            "evaluation_fingerprint": "eval-v1",
+            "embedding_dimension": 0,
+        }
+    ]
 
 
 def test_graph_generation_reuses_unchanged_entity_and_relationship_embeddings(tmp_path, monkeypatch):
@@ -229,6 +341,8 @@ def test_graph_generation_reuses_unchanged_entity_and_relationship_embeddings(tm
     assert embedded_batches == []
     assert fake_client.collections["kb__graph_entity__gen-1"].get_calls == [(512, 0)]
     assert fake_client.collections["kb__graph_relationship__gen-1"].get_calls == [(512, 0)]
+    assert fake_client.collections["kb__graph_entity__gen-2"].metadata["embedding_dimension"] == 2
+    assert fake_client.collections["kb__graph_relationship__gen-2"].metadata["embedding_dimension"] == 2
 
     full_stats = graph_vector_store.index_graph_vectors_generation(nodes, edges, "gen-3", full_rebuild=True)
     assert full_stats["graph_reused_embedding_count"] == 0
@@ -266,6 +380,24 @@ def test_graph_generation_reembeds_when_embedding_fingerprint_changes(tmp_path, 
     assert stats["graph_reused_embedding_count"] == 0
     assert stats["graph_embedded_record_count"] == 2
     assert sum(len(batch) for batch in embedded_batches) == 2
+
+
+def test_graph_generation_rejects_entity_relationship_dimension_mismatch(monkeypatch):
+    from services.rag_api.graph import graph_vector_store
+
+    dimensions = iter([2, 3])
+    monkeypatch.setattr(
+        graph_vector_store,
+        "_build_generation_collection",
+        lambda *args, **kwargs: {"reused": 0, "embedded": 1, "embedding_dimension": next(dimensions)},
+    )
+
+    with pytest.raises(RuntimeError, match="维度"):
+        graph_vector_store.index_graph_vectors_generation(
+            [{"id": "entity", "label": "entity", "document_ids": ["doc-a"]}],
+            [{"source": "entity", "target": "rule", "label": "contains", "document_id": "doc-a"}],
+            "gen-1",
+        )
 
 
 def test_cleanup_deletes_only_generations_older_than_current_and_previous(tmp_path, monkeypatch):
@@ -405,9 +537,10 @@ def test_generation_build_lock_rejects_second_process(tmp_path, monkeypatch):
 
 
 class _FakeCollection:
-    def __init__(self) -> None:
+    def __init__(self, metadata=None) -> None:
         self.records = {}
         self.get_calls = []
+        self.metadata = dict(metadata or {})
 
     def upsert(self, *, ids, documents, embeddings, metadatas):
         for item_id, document, embedding, metadata in zip(ids, documents, embeddings, metadatas):
@@ -418,6 +551,12 @@ class _FakeCollection:
             }
 
     add = upsert
+
+    def modify(self, *, metadata=None, name=None):
+        if metadata is not None:
+            if "hnsw:space" in metadata:
+                raise ValueError("distance function metadata cannot be modified")
+            self.metadata = dict(metadata)
 
     def get(self, *, include, limit=None, offset=None):
         self.get_calls.append((limit, offset))
@@ -441,7 +580,12 @@ class _FakeClient:
         self.collections = {}
 
     def get_or_create_collection(self, name, metadata=None):
-        self.collections.setdefault(name, _FakeCollection())
+        self.collections.setdefault(name, _FakeCollection(metadata))
+        return self.collections[name]
+
+    def get_collection(self, name):
+        if name not in self.collections:
+            raise KeyError(name)
         return self.collections[name]
 
     def delete_collection(self, name):

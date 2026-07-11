@@ -13,7 +13,7 @@ from services.rag_api.security import current_retrieval_context
 from services.rag_api.llm.siliconflow_client import embed_texts
 from services.rag_api.vector.chroma_store import EMBEDDING_BATCH_SIZE
 from services.rag_api.vector.chroma_store import _get_chroma_client
-from services.rag_api.vector.embedding_reuse import iter_matching_embeddings
+from services.rag_api.vector.embedding_reuse import iter_matching_embeddings, update_embedding_dimension
 
 ENTITY_SUFFIX = "_graph_entities"
 RELATIONSHIP_SUFFIX = "_graph_relationships"
@@ -65,11 +65,19 @@ def index_graph_vectors_generation(
     relationship_stats = _build_generation_collection(
         relationship_name, relationship_records, generation_id, "graph_relationship", full_rebuild=full_rebuild
     )
+    graph_dimensions = {
+        int(stats.get("embedding_dimension") or 0)
+        for stats in (entity_stats, relationship_stats)
+        if int(stats.get("embedding_dimension") or 0) > 0
+    }
+    if len(graph_dimensions) > 1:
+        raise RuntimeError(f"图谱 embedding 维度不一致：{sorted(graph_dimensions)}")
     return {
         "graph_entity_index_count": len(entity_records),
         "graph_relationship_index_count": len(relationship_records),
         "graph_reused_embedding_count": entity_stats["reused"] + relationship_stats["reused"],
         "graph_embedded_record_count": entity_stats["embedded"] + relationship_stats["embedded"],
+        "graph_embedding_dimension": next(iter(graph_dimensions), 0),
     }
 
 
@@ -151,6 +159,7 @@ def _build_generation_collection(
     write_embeddings: list[list[float]] = []
     write_metadatas: list[dict[str, Any]] = []
     write_batch_size = max(1, min(512, int(client.get_max_batch_size())))
+    embedding_dimension = 0
 
     def flush() -> None:
         if not write_ids:
@@ -167,6 +176,8 @@ def _build_generation_collection(
         write_metadatas.clear()
 
     def queue(group: list[dict[str, Any]], embedding: list[float]) -> None:
+        nonlocal embedding_dimension
+        embedding_dimension = update_embedding_dimension(embedding_dimension, embedding)
         for record in group:
             write_ids.append(str(record["id"]))
             write_documents.append(str(record["document"]))
@@ -197,10 +208,20 @@ def _build_generation_collection(
         for group, embedding in zip(groups, generated):
             queue(group, embedding)
     flush()
+    collection.modify(
+        metadata={
+            "embedding_fingerprint": embedding_fingerprint,
+            "embedding_dimension": embedding_dimension,
+        }
+    )
     if collection.count() != len(records):
         raise RuntimeError(f"图谱索引代写入数量不一致：expected={len(records)}, actual={collection.count()}")
     embedded_record_count = sum(len(group) for group in missing_groups)
-    return {"reused": len(records) - embedded_record_count, "embedded": embedded_record_count}
+    return {
+        "reused": len(records) - embedded_record_count,
+        "embedded": embedded_record_count,
+        "embedding_dimension": embedding_dimension,
+    }
 
 
 def _generation_source_names(kind: str) -> list[str]:
@@ -261,6 +282,12 @@ def _search_collection(collection_name: str, query: str, top_k: int) -> list[dic
     if collection.count() == 0:
         return []
     query_embedding = embed_texts([query])[0]
+    metadata = getattr(collection, "metadata", None) or {}
+    expected_dimension = int(metadata.get("embedding_dimension") or 0)
+    if expected_dimension and len(query_embedding) != expected_dimension:
+        raise RuntimeError(
+            f"向量模型维度已变化：index={expected_dimension}, query={len(query_embedding)}；请执行全量重建"
+        )
     query_kwargs: dict[str, Any] = {
         "query_embeddings": [query_embedding],
         "n_results": top_k,
