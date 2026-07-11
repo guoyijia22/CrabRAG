@@ -46,9 +46,12 @@ def load_rag_settings() -> RagSettings:
     if not SETTINGS_PATH.exists():
         return RagSettings()
     try:
-        return RagSettings.model_validate_json(SETTINGS_PATH.read_text(encoding="utf-8"))
+        settings = RagSettings.model_validate_json(SETTINGS_PATH.read_text(encoding="utf-8"))
     except Exception:
         return RagSettings()
+    from services.rag_api.evaluation.approval import effective_runtime_settings
+
+    return effective_runtime_settings(settings)
 
 
 def save_rag_settings(settings: RagSettings) -> RagSettings:

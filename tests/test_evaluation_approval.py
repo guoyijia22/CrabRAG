@@ -84,3 +84,36 @@ def test_settings_update_accepts_exact_approved_strategy(tmp_path: Path, monkeyp
     saved = main.update_rag_settings(candidate)
 
     assert saved.rerank_enabled is True
+
+
+def test_enabled_strategy_rejects_unapproved_parameter_changes(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(rag_settings, "SETTINGS_PATH", tmp_path / "rag_settings.json")
+    monkeypatch.setattr(main, "get_settings", lambda: type("Settings", (), {"use_local_models": False})())
+    monkeypatch.setattr(main.index_generation, "active_generation_id", lambda: "gen-1")
+    monkeypatch.setattr(approval, "APPROVALS_PATH", tmp_path / "approvals.json")
+    approved = RagSettings(rerank_enabled=True, top_k=2)
+    approval.record_quality_approvals(_passing_run(approved))
+    rag_settings.save_rag_settings(approved)
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.update_rag_settings(approved.model_copy(update={"top_k": 10}))
+
+    assert exc_info.value.status_code == 409
+    assert rag_settings.SETTINGS_PATH.read_text(encoding="utf-8").find('"top_k": 2') > 0
+
+
+def test_generation_change_disables_stale_approved_runtime_strategy(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(rag_settings, "SETTINGS_PATH", tmp_path / "rag_settings.json")
+    monkeypatch.setattr(approval, "APPROVALS_PATH", tmp_path / "approvals.json")
+    candidate = RagSettings(rerank_enabled=True)
+    approval.record_quality_approvals(_passing_run(candidate))
+    rag_settings.save_rag_settings(candidate)
+
+    monkeypatch.setattr(approval.index_generation, "active_generation_id", lambda: "gen-1")
+    assert rag_settings.load_rag_settings().rerank_enabled is True
+
+    monkeypatch.setattr(approval.index_generation, "active_generation_id", lambda: "gen-2")
+    effective = rag_settings.load_rag_settings()
+
+    assert effective.rerank_enabled is False
+    assert rag_settings.RagSettings.model_validate_json(rag_settings.SETTINGS_PATH.read_text(encoding="utf-8")).rerank_enabled is True

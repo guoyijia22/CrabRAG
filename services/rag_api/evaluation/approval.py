@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from services.rag_api import index_generation
 from services.rag_api.evaluation.profiles import SWITCH_KEYS
 from services.rag_api.rag_settings import PROJECT_ROOT, RagSettings
 
@@ -77,16 +78,28 @@ def is_settings_approved(settings: RagSettings, generation_id: str | None) -> bo
 
 
 def require_strategy_approval(current: RagSettings, candidate: RagSettings, generation_id: str | None) -> None:
-    newly_enabled = [
-        key
-        for key in SWITCH_KEYS
-        if bool(getattr(candidate, key, False)) and not bool(getattr(current, key, False))
-    ]
-    if newly_enabled and not is_settings_approved(candidate, generation_id):
+    del current
+    enabled = [key for key in SWITCH_KEYS if bool(getattr(candidate, key, False))]
+    if generation_id and enabled and not is_settings_approved(candidate, generation_id):
         raise ValueError(
             "启用检索增强策略前，必须在当前索引代使用固定评测集通过质量门禁；"
-            f"待批准策略：{', '.join(newly_enabled)}"
+            f"待批准策略：{', '.join(enabled)}"
         )
+
+
+def effective_runtime_settings(settings: RagSettings) -> RagSettings:
+    enabled = [key for key in SWITCH_KEYS if bool(getattr(settings, key, False))]
+    if not enabled:
+        return settings
+    try:
+        generation_id = index_generation.active_generation_id()
+    except Exception:  # noqa: BLE001
+        generation_id = "unavailable"
+    if not generation_id:
+        return settings
+    if is_settings_approved(settings, generation_id):
+        return settings
+    return settings.model_copy(update={key: False for key in SWITCH_KEYS})
 
 
 def _load_approvals() -> dict[str, Any]:
