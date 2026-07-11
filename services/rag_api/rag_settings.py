@@ -25,6 +25,7 @@ class RagSettings(BaseModel):
     context_rewrite_enabled: bool = False
     dynamic_top_k_enabled: bool = False
     parent_context_enabled: bool = False
+    dedup_enabled: bool = False
     rag_param_tuning_enabled: bool = False
     chunk_size: int = Field(default=600, ge=200, le=1200)
     chunk_overlap: int = Field(default=100, ge=0, le=300)

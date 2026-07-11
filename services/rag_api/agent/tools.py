@@ -4,6 +4,7 @@ from services.rag_api.graph.graph_search import graph_relation_search
 from services.rag_api.exceptions import IndexCollectionUnavailable
 from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, resolve_retrieval_top_k
 from services.rag_api.retrieval.optimizations import apply_query_expansion, apply_rerank, keyword_search_candidates
+from services.rag_api.retrieval.dedup import apply_candidate_dedup
 from services.rag_api.retrieval.parent_context import apply_parent_context
 from services.rag_api.retrieval.cache import RETRIEVAL_CACHE, retrieval_cache_key
 from services.rag_api.security import current_retrieval_context
@@ -21,6 +22,7 @@ def vector_rule_search(
     allow_rerank: bool = True,
     allow_keyword_search: bool = True,
     allow_parent_context: bool = True,
+    allow_dedup: bool = True,
 ) -> dict:
     rag_settings = load_rag_settings()
     top_k = int(resolve_retrieval_top_k(query, rag_settings)["effective_top_k"])
@@ -40,6 +42,9 @@ def vector_rule_search(
         if allow_parent_context:
             vector_results, parent_trace = apply_parent_context(vector_results, rag_settings)
             trace.append({"node": "parent_context", "output": parent_trace})
+        if allow_dedup:
+            vector_results, dedup_trace = apply_candidate_dedup(vector_results, rag_settings)
+            trace.append({"node": "candidate_dedup", "output": dedup_trace})
         if not allow_keyword_search:
             trace.append({"node": "hybrid_bm25", "output": {"enabled": False, "reason": "keyword_stream_used_by_hybrid_round_robin"}})
         else:
@@ -66,7 +71,14 @@ def vector_rule_search(
         return {"mode": "vector", "chunks": [], "relation_paths": [], "error": str(exc), "trace": trace}
 
 
-def graph_relation_search_tool(query: str, intent: str, entities: list[str], *, allow_parent_context: bool = True) -> dict:
+def graph_relation_search_tool(
+    query: str,
+    intent: str,
+    entities: list[str],
+    *,
+    allow_parent_context: bool = True,
+    allow_dedup: bool = True,
+) -> dict:
     rag_settings = load_rag_settings()
     top_k = int(resolve_retrieval_top_k(query, rag_settings)["effective_top_k"])
     try:
@@ -76,6 +88,9 @@ def graph_relation_search_tool(query: str, intent: str, entities: list[str], *, 
         if allow_parent_context:
             chunks, parent_trace = apply_parent_context(chunks, rag_settings)
             trace.append({"node": "parent_context", "output": parent_trace})
+        if allow_dedup:
+            chunks, dedup_trace = apply_candidate_dedup(chunks, rag_settings)
+            trace.append({"node": "candidate_dedup", "output": dedup_trace})
         return {
             "mode": "graph",
             "chunks": chunks,
@@ -118,7 +133,13 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
     else:
         collection_errors: list[str] = []
         try:
-            graph_result = graph_relation_search_tool(query, intent, entities, allow_parent_context=False)
+            graph_result = graph_relation_search_tool(
+                query,
+                intent,
+                entities,
+                allow_parent_context=False,
+                allow_dedup=False,
+            )
         except IndexCollectionUnavailable as exc:
             collection_errors.append(str(exc))
             graph_result = {"mode": "graph", "chunks": [], "relation_paths": [], "error": str(exc), "trace": []}
@@ -131,6 +152,7 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
                 allow_rerank=False,
                 allow_keyword_search=False,
                 allow_parent_context=False,
+                allow_dedup=False,
             )
         except IndexCollectionUnavailable as exc:
             collection_errors.append(str(exc))
@@ -155,6 +177,7 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
             top_k=candidate_k,
         )
         merged_candidates, parent_trace = apply_parent_context(merged_candidates, rag_settings)
+        merged_candidates, dedup_trace = apply_candidate_dedup(merged_candidates, rag_settings)
         trace = vector_result.get("trace", []) + graph_result.get("trace", []) + [
             {
                 "node": "hybrid_round_robin",
@@ -167,6 +190,7 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
                 },
             },
             {"node": "parent_context", "output": parent_trace},
+            {"node": "candidate_dedup", "output": dedup_trace},
         ]
         if allow_rerank:
             chunks, rerank_trace = apply_rerank(query, merged_candidates, rag_settings, top_k=top_k)

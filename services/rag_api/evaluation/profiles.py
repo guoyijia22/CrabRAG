@@ -8,6 +8,7 @@ SWITCH_KEYS = [
     "context_rewrite_enabled",
     "dynamic_top_k_enabled",
     "parent_context_enabled",
+    "dedup_enabled",
     "multi_vector_enabled",
 ]
 
@@ -22,6 +23,7 @@ PROFILE_SWITCHES = [
     ("context_rewrite_enabled", "多轮追问重写", "多轮聊天中将追问改写为独立查询"),
     ("dynamic_top_k_enabled", "动态 Top-K", "根据查询复杂度适度增加检索候选，简单查询保持基础值"),
     ("parent_context_enabled", "父片段上下文", "子片段命中后读取同文档父片段，扩展回答上下文"),
+    ("dedup_enabled", "近重复证据去重", "在同一文档或来源内合并高度相似候选，保留最高分证据"),
     ("multi_vector_enabled", "多粒度文本索引", "重建知识库时生成 document / paragraph / sentence 多粒度索引"),
 ]
 
@@ -47,7 +49,7 @@ COMBINATION_PROFILES = [
     (
         "all_enhancements",
         "全增强配置",
-        "启用查询扩展、统一重排、多轮追问重写、动态 Top-K、父片段上下文和多粒度文本索引",
+        "启用查询扩展、统一重排、多轮追问重写、动态 Top-K、父片段上下文、近重复证据去重和多粒度文本索引",
         SWITCH_KEYS,
     ),
 ]
