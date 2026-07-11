@@ -112,7 +112,8 @@ def test_release_powershell_wrapper_and_ci_contracts_are_present():
     assert "bash ./install.sh" in windows
     assert "start" in windows.lower() and "health" in windows.lower()
     assert "Expand-Archive" in windows
-    assert "CrabRAG-v1.1.0-windows-x64.zip" in windows
+    assert '$version = (Get-Content -LiteralPath .\\VERSION -Raw).Trim()' in windows
+    assert "CrabRAG-v$version-windows-x64.zip" in windows
     assert "@huggingface/transformers" in windows
     assert "stop.bat" in windows and "run.json" in windows
     assert '"release:windows"' in package

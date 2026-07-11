@@ -29,11 +29,14 @@ jobs:
         run: bun run check
       - name: Build release package
         shell: powershell
-        run: .\scripts\build_release.ps1 -Version 1.1.0 -OutputDir "$env:RUNNER_TEMP\crabrag-release"
+        run: |
+          $version = (Get-Content -LiteralPath .\VERSION -Raw).Trim()
+          .\scripts\build_release.ps1 -Version $version -OutputDir "$env:RUNNER_TEMP\crabrag-release"
       - name: Release install, dependency, start, health, and stop smoke
         shell: powershell
         run: |
-          $archive = "$env:RUNNER_TEMP\crabrag-release\CrabRAG-v1.1.0-windows-x64.zip"
+          $version = (Get-Content -LiteralPath .\VERSION -Raw).Trim()
+          $archive = "$env:RUNNER_TEMP\crabrag-release\CrabRAG-v$version-windows-x64.zip"
           $extractRoot = "$env:RUNNER_TEMP\crabrag-installed"
           Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
           $releaseRoot = Join-Path $extractRoot "CrabRAG"

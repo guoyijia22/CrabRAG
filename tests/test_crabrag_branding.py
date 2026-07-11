@@ -190,7 +190,7 @@ def test_frontend_top_nav_shows_app_version():
     bundle_text = next(Path("apps/web/dist/assets").glob("index-*.js")).read_text(encoding="utf-8")
     css_text = next(Path("apps/web/dist/assets").glob("index-*.css")).read_text(encoding="utf-8")
 
-    assert "v1.1.0" in bundle_text
+    assert "v1.2.0" in bundle_text
     assert ".app-version{color:#a8a8a8" in css_text
 
 
