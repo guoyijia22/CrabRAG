@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from services.rag_api import index_generation
 from services.rag_api.agent.prompts import build_keyword_extraction_prompt, detect_prompt_language
 from services.rag_api.graph.entities import ENTITIES
 from services.rag_api.graph.graph_vector_store import search_graph_entities, search_graph_relationships
@@ -12,7 +13,7 @@ from services.rag_api.graph.graph_store import load_raw_graph
 from services.rag_api.graph.query_keywords import split_graph_query_keywords
 from services.rag_api.graph.relations import RELATIONS
 from services.rag_api.llm.siliconflow_client import chat_completion
-from services.rag_api.security import filter_graph_by_permission
+from services.rag_api.security import current_retrieval_context, filter_graph_by_permission
 
 KB_GRAPH_PATH = DEFAULT_KB_GRAPH_PATH
 COMMON_QUERY_TERMS = [
@@ -78,7 +79,25 @@ def graph_relation_search(query: str, intent: str, top_k: int = 2) -> dict:
     dynamic_result = _dynamic_graph_relation_search(query, intent, top_k=top_k)
     if dynamic_result is not None:
         return dynamic_result
+    context = current_retrieval_context()
+    if context is not None and context.generation_id != "legacy":
+        return _governed_text_fallback(query, intent, top_k)
+    if context is None and index_generation.active_generation_id():
+        return {"entities": [], "relation_paths": [], "chunks": []}
     return _static_graph_relation_search(query, intent, top_k=top_k)
+
+
+def _governed_text_fallback(query: str, intent: str, top_k: int) -> dict:
+    entities = extract_entities(query)
+    if intent and intent not in entities:
+        entities.append(intent)
+    try:
+        from services.rag_api.vector.chroma_store import search_chunks_by_keywords
+
+        chunks = search_chunks_by_keywords(query, intent, entities, top_k=top_k)
+    except Exception:
+        chunks = []
+    return {"entities": entities, "relation_paths": [], "chunks": chunks[:top_k]}
 
 
 def extract_query_keywords_with_llm(query: str) -> dict[str, Any]:

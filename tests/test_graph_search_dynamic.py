@@ -73,6 +73,54 @@ def test_graph_relation_search_falls_back_to_static_graph_when_dynamic_graph_mis
     assert all(item.get("graph_source") != "dynamic_graph" for item in result["relation_paths"])
 
 
+def test_governed_graph_fallback_uses_only_permission_filtered_text(tmp_path, monkeypatch):
+    from services.rag_api.graph import graph_search
+    from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
+    from services.rag_api.vector import chroma_store
+
+    monkeypatch.setattr(graph_search, "KB_GRAPH_PATH", tmp_path / "missing-kb-graph.json", raising=False)
+    visible_chunks = [
+        {
+            "content": "当前索引代允许访问的规则。",
+            "source_file": "public.md",
+            "document_id": "public-doc",
+            "score": 0.8,
+            "retrieval_channel": "keyword",
+        }
+    ]
+    monkeypatch.setattr(chroma_store, "search_chunks_by_keywords", lambda query, intent, entities, top_k: visible_chunks)
+    context = RetrievalContext(
+        generation_id="gen-1",
+        principal=PrincipalContext.anonymous(),
+        allowed_document_ids=frozenset({"public-doc"}),
+        permission_fingerprint="public-gen-1",
+    )
+
+    with use_retrieval_context(context):
+        result = graph_search.graph_relation_search("企业客户地址迁移需要审核吗？", "合规审核", top_k=3)
+
+    assert result["relation_paths"] == []
+    assert result["chunks"] == visible_chunks
+
+
+def test_governed_graph_without_retrieval_context_fails_closed(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.graph import graph_search
+    from services.rag_api.vector import chroma_store
+
+    monkeypatch.setattr(graph_search, "KB_GRAPH_PATH", tmp_path / "missing-kb-graph.json", raising=False)
+    monkeypatch.setattr(index_generation, "active_generation_id", lambda: "gen-1")
+    monkeypatch.setattr(
+        chroma_store,
+        "search_chunks_by_keywords",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("missing context must not search text")),
+    )
+
+    result = graph_search.graph_relation_search("企业客户地址迁移需要审核吗？", "合规审核", top_k=3)
+
+    assert result == {"entities": [], "relation_paths": [], "chunks": []}
+
+
 def test_graph_relation_search_uses_entity_and_relationship_vector_hits(tmp_path, monkeypatch):
     from services.rag_api.graph import graph_search
     from services.rag_api.vector import chroma_store
