@@ -104,3 +104,84 @@ def test_generated_graph_carries_source_document_ids_for_permission_filtering():
     assert all(node["document_ids"] == ["doc-a"] for node in graph["nodes"])
     assert all(node["document_sources"] == [{"document_id": "doc-a", "source_file": "a.txt"}] for node in graph["nodes"])
     assert all(edge["document_id"] == "doc-a" for edge in graph["edges"])
+
+
+def test_same_relationship_keeps_one_evidence_record_per_document():
+    from services.rag_api.graph.kb_graph_builder import build_kb_graph
+
+    categories = {
+        "items": [
+            {
+                "name": "项目材料",
+                "source_files": ["一渠一表-a.txt", "一渠一表-b.txt"],
+                "document_count": 2,
+                "chunk_count": 2,
+            }
+        ]
+    }
+    documents = [
+        {"document_id": "doc-a", "source_file": "一渠一表-a.txt", "content": "一渠一表"},
+        {"document_id": "doc-b", "source_file": "一渠一表-b.txt", "content": "一渠一表"},
+    ]
+    chunks = [
+        {"metadata": {"document_id": "doc-a", "source_file": "一渠一表-a.txt"}},
+        {"metadata": {"document_id": "doc-b", "source_file": "一渠一表-b.txt"}},
+    ]
+
+    graph = build_kb_graph(categories, documents, chunks)
+    shared = [edge for edge in graph["edges"] if edge["source"] == "一渠一表" and edge["target"] == "项目材料"]
+
+    assert {edge["document_id"] for edge in shared} == {"doc-a", "doc-b"}
+    assert len({edge["id"] for edge in shared}) == 2
+
+
+def test_same_filename_from_two_knowledge_bases_keeps_document_identity():
+    from services.rag_api.graph.kb_graph_builder import build_kb_graph
+
+    categories = {
+        "items": [
+            {
+                "name": "项目材料",
+                "source_files": ["policy.txt"],
+                "document_sources": [
+                    {"document_id": "kb-a-doc", "source_file": "policy.txt"},
+                    {"document_id": "kb-b-doc", "source_file": "policy.txt"},
+                ],
+                "document_count": 2,
+                "chunk_count": 2,
+            }
+        ]
+    }
+    documents = [
+        {"document_id": "kb-a-doc", "source_file": "policy.txt", "content": "一渠一表"},
+        {"document_id": "kb-b-doc", "source_file": "policy.txt", "content": "一渠一表"},
+    ]
+    chunks = [
+        {"metadata": {"document_id": "kb-a-doc", "source_file": "policy.txt"}},
+        {"metadata": {"document_id": "kb-b-doc", "source_file": "policy.txt"}},
+    ]
+
+    graph = build_kb_graph(categories, documents, chunks)
+
+    source_nodes = [node for node in graph["nodes"] if node.get("type") == "来源文件"]
+    assert {node["id"] for node in source_nodes} == {"policy.txt::kb-a-doc", "policy.txt::kb-b-doc"}
+    assert {edge["document_id"] for edge in graph["edges"]} == {"kb-a-doc", "kb-b-doc"}
+
+
+def test_categories_keep_same_filename_as_two_document_sources(tmp_path):
+    from services.rag_api.document.categories import save_kb_categories
+
+    documents = [
+        {"document_id": "kb-a-doc", "source_file": "policy.txt", "content": "合规审核材料"},
+        {"document_id": "kb-b-doc", "source_file": "policy.txt", "content": "合规审核材料"},
+    ]
+    chunks = [
+        {"metadata": {"document_id": "kb-a-doc", "source_file": "policy.txt", "category": "合规审核"}},
+        {"metadata": {"document_id": "kb-b-doc", "source_file": "policy.txt", "category": "合规审核"}},
+    ]
+
+    payload = save_kb_categories(documents, chunks, path=tmp_path / "categories.json")
+    item = next(item for item in payload["items"] if item["name"] == "合规审核")
+
+    assert item["document_count"] == 2
+    assert {source["document_id"] for source in item["document_sources"]} == {"kb-a-doc", "kb-b-doc"}

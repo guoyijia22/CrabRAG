@@ -14,7 +14,7 @@ def append_qa_log(item: dict) -> None:
         file.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def read_qa_logs(intent: str | None = None) -> list[dict]:
+def read_qa_logs(intent: str | None = None, *, permission_fingerprint: str | None = None) -> list[dict]:
     path = get_settings().logs_dir / "qa.jsonl"
     if not path.exists():
         return []
@@ -28,6 +28,8 @@ def read_qa_logs(intent: str | None = None) -> list[dict]:
             except json.JSONDecodeError:
                 continue
             if intent and item.get("intent") != intent:
+                continue
+            if permission_fingerprint is not None and item.get("permission_fingerprint") != permission_fingerprint:
                 continue
             items.append(item)
     return list(reversed(items[-200:]))

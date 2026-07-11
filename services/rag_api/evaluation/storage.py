@@ -58,6 +58,7 @@ def list_evaluation_runs(limit: int = 20) -> list[dict]:
                 "created_at": payload.get("created_at", ""),
                 "profile_count": payload.get("profile_count", 0),
                 "question_count": payload.get("question_count", 0),
+                "permission_fingerprint": payload.get("permission_fingerprint", ""),
                 "summary": payload.get("summary", {}),
             }
         )

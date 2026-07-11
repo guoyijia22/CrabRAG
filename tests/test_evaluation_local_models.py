@@ -216,3 +216,29 @@ def test_local_model_evaluation_case_uses_retrieval_without_full_qa(monkeypatch)
     assert case["retrieval_mode"] == "vector"
     assert case["references"] == [chunk]
     assert "营业执照" in case["answer"]
+
+
+def test_evaluation_collection_is_built_without_publishing_production_generation(monkeypatch):
+    from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
+
+    profile = {
+        "id": "multi",
+        "settings": RagSettings(multi_vector_enabled=True),
+        "collection_name": "crabrag_eval_multi_vector",
+    }
+    principal = PrincipalContext.anonymous()
+    context = RetrievalContext(
+        generation_id="gen-1",
+        principal=principal,
+        allowed_document_ids=frozenset({"doc-a"}),
+        permission_fingerprint="permission-1",
+    )
+    added = []
+    monkeypatch.setattr(runner, "collection_status", lambda: {"count": 0})
+    monkeypatch.setattr(runner, "_evaluation_chunks", lambda settings: [{"id": "chunk-a"}])
+    monkeypatch.setattr(runner, "add_chunks", lambda chunks: added.extend(chunks) or len(chunks))
+
+    with use_retrieval_context(context):
+        runner.ensure_evaluation_collection(profile)
+
+    assert added == [{"id": "chunk-a"}]

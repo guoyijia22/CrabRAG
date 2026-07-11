@@ -42,7 +42,7 @@ def load_active_catalog(docs_dirs: list[Path], files: list[Path], *, cutoff: dat
         warnings.extend({**warning, "knowledge_base_id": manifest["knowledge_base_id"]} for warning in manifest.get("audit_warnings", []))
         for raw in manifest["documents"]:
             entry = _normalize_entry(raw)
-            if entry["status"] != "published":
+            if entry["status"] not in {"published", "retired"}:
                 continue
             effective = _parse_timestamp(entry["effective_at"], "effective_at")
             if effective > cutoff.astimezone(timezone.utc) and (next_activation is None or effective < next_activation):
@@ -129,7 +129,7 @@ def select_active_versions(manifest: dict[str, Any], root: Path, *, cutoff: date
     for document_id, entries in grouped.items():
         published_times: dict[datetime, str] = {}
         for entry in entries:
-            if entry["status"] != "published":
+            if entry["status"] not in {"published", "retired"}:
                 continue
             effective = _parse_timestamp(entry["effective_at"], "effective_at")
             if effective in published_times:
@@ -138,11 +138,13 @@ def select_active_versions(manifest: dict[str, Any], root: Path, *, cutoff: date
         candidates = [
             entry
             for entry in entries
-            if entry["status"] == "published" and _parse_timestamp(entry["effective_at"], "effective_at") <= cutoff
+            if entry["status"] in {"published", "retired"} and _parse_timestamp(entry["effective_at"], "effective_at") <= cutoff
         ]
         if not candidates:
             continue
         selected = max(candidates, key=lambda item: _parse_timestamp(item["effective_at"], "effective_at"))
+        if selected["status"] == "retired":
+            continue
         source_path = (root / selected["path"]).resolve()
         try:
             source_path.relative_to(root.resolve())

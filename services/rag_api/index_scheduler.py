@@ -89,12 +89,12 @@ class IndexScheduler:
 
 
 def _active_generation_status() -> dict[str, Any]:
-    generation_id = index_generation.active_generation_id()
-    if not generation_id:
-        return {}
     try:
+        generation_id = index_generation.active_generation_id()
+        if not generation_id:
+            return {}
         return index_generation.load_generation_manifest(generation_id)
-    except ValueError:
+    except (ValueError, index_generation.IndexStateError):
         return {}
 
 

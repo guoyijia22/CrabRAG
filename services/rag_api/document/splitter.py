@@ -112,6 +112,7 @@ def _apply_content_addressed_identity(chunk: dict, document: dict, occurrences: 
             "chunk_id": chunk_id,
             "chunk_hash": chunk_hash,
             "document_version": str(document.get("version") or "1"),
+            "publish_status": str(document.get("publish_status") or "published"),
             "effective_at": str(document.get("effective_at") or ""),
             "updated_at": str(document.get("updated_at") or ""),
             "policy_ref": str(document.get("policy_ref") or ""),

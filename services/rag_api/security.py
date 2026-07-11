@@ -81,7 +81,10 @@ def build_retrieval_context(
     principal: PrincipalContext,
     permission_provider: PermissionProvider | None = None,
 ) -> RetrievalContext:
-    generation_id = index_generation.active_generation_id()
+    try:
+        generation_id = index_generation.active_generation_id()
+    except index_generation.IndexStateError as exc:
+        raise PermissionServiceError("活动索引状态不可用，已拒绝检索") from exc
     if not generation_id:
         return RetrievalContext(
             generation_id="legacy",
@@ -133,12 +136,20 @@ def filter_graph_by_permission(
             for item in node.get("document_sources", []) or []
             if str(item.get("document_id") or "") in authorized_ids
         ]
+        chunk_counts = node.get("chunk_counts_by_document", {}) or {}
+        authorized_chunk_count = sum(int(chunk_counts.get(document_id, 0)) for document_id in authorized_ids)
         filtered_nodes.append(
             {
                 **node,
                 "document_ids": sorted(authorized_ids),
                 "document_sources": document_sources,
                 "source_files": sorted({str(item.get("source_file")) for item in document_sources if item.get("source_file")}),
+                "document_count": len(authorized_ids),
+                "chunk_count": authorized_chunk_count,
+                "evidence_count": authorized_chunk_count or len(authorized_ids),
+                "chunk_counts_by_document": {
+                    document_id: int(chunk_counts.get(document_id, 0)) for document_id in sorted(authorized_ids)
+                },
             }
         )
     filtered_edges = [
@@ -151,11 +162,12 @@ def filter_graph_by_permission(
 
 @contextmanager
 def use_retrieval_context(context: RetrievalContext):
-    token = _RETRIEVAL_CONTEXT.set(context)
-    try:
-        yield context
-    finally:
-        _RETRIEVAL_CONTEXT.reset(token)
+    with index_generation.pin_generation(context.generation_id):
+        token = _RETRIEVAL_CONTEXT.set(context)
+        try:
+            yield context
+        finally:
+            _RETRIEVAL_CONTEXT.reset(token)
 
 
 def _permission_fingerprint(principal: PrincipalContext, generation_id: str) -> str:

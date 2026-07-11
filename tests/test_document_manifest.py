@@ -116,6 +116,46 @@ def test_load_active_catalog_returns_only_effective_version_and_next_activation(
     assert catalog["warnings"] == []
 
 
+def test_retired_version_deactivates_older_published_version(tmp_path: Path):
+    from services.rag_api.document.manifest import select_active_versions
+
+    path = tmp_path / "policy.txt"
+    path.write_text("policy", encoding="utf-8")
+    manifest = {
+        "schema_version": 1,
+        "knowledge_base_id": "kb-test",
+        "documents": [
+            _entry("policy", "policy.txt", "1", "2026-01-01T00:00:00Z"),
+            _entry("policy", "policy.txt", "2", "2026-07-01T00:00:00Z", status="retired"),
+        ],
+    }
+
+    active = select_active_versions(manifest, tmp_path, cutoff=datetime(2026, 7, 11, tzinfo=timezone.utc))
+
+    assert active == []
+
+
+def test_future_retirement_is_reported_as_next_activation(tmp_path: Path):
+    from services.rag_api.document.manifest import load_active_catalog
+
+    path = tmp_path / "policy.txt"
+    path.write_text("policy", encoding="utf-8")
+    manifest = {
+        "schema_version": 1,
+        "knowledge_base_id": "kb-test",
+        "documents": [
+            _entry("policy", "policy.txt", "1", "2026-01-01T00:00:00Z"),
+            _entry("policy", "policy.txt", "2", "2026-08-01T00:00:00Z", status="retired"),
+        ],
+        "audit_warnings": [],
+    }
+    (tmp_path / ".crabrag-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    catalog = load_active_catalog([tmp_path], [path], cutoff=datetime(2026, 7, 11, tzinfo=timezone.utc))
+
+    assert catalog["next_activation_at"] == "2026-08-01T00:00:00Z"
+
+
 def _entry(document_id: str, path: str, version: str, effective_at: str, *, status: str = "published") -> dict:
     return {
         "document_id": document_id,

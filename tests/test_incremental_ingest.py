@@ -28,7 +28,13 @@ def _configure_incremental_paths(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(index_generation, "ACTIVE_INDEX_PATH", index_root / "active.json")
     monkeypatch.setattr(index_generation, "GENERATIONS_DIR", index_root / "generations")
     monkeypatch.setattr(ingest, "ensure_knowledge_base_name", lambda category_payload, documents, chunk_count: ("测试知识库", "test"))
-    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", lambda category_payload, documents, chunks, path=None: {})
+    def save_schema_suggestion(category_payload, documents, chunks, path=None):
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+        return {}
+
+    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", save_schema_suggestion)
     return status_path, snapshot_dir, graph_path
 
 
@@ -143,7 +149,7 @@ def _capture_generation_builds(ingest, monkeypatch):
     monkeypatch.setattr(
         ingest,
         "index_graph_vectors_generation",
-        lambda nodes, edges, generation_id: {
+        lambda nodes, edges, generation_id, full_rebuild=False: {
             "graph_entity_index_count": len(nodes),
             "graph_relationship_index_count": len(edges),
             "graph_reused_embedding_count": 0,
@@ -190,7 +196,7 @@ def test_ingest_publishes_generation_only_after_all_indexes_succeed(tmp_path, mo
     monkeypatch.setattr(
         ingest,
         "index_graph_vectors_generation",
-        lambda nodes, edges, generation_id: {
+        lambda nodes, edges, generation_id, full_rebuild=False: {
             "graph_entity_index_count": len(nodes),
             "graph_relationship_index_count": len(edges),
             "graph_reused_embedding_count": 0,
@@ -269,7 +275,7 @@ def test_incremental_ingest_removes_deleted_documents_from_vectors_and_graph(tmp
     assert payload["edges"] == []
 
 
-def test_incremental_ingest_skips_duplicate_content(tmp_path, monkeypatch):
+def test_incremental_ingest_keeps_duplicate_content_per_document(tmp_path, monkeypatch):
     from services.rag_api.document import ingest
 
     docs_dir = tmp_path / "docs"
@@ -283,10 +289,67 @@ def test_incremental_ingest_skips_duplicate_content(tmp_path, monkeypatch):
 
     result = ingest.ingest_knowledge_base()
 
-    assert result["processed_document_count"] == 1
+    assert result["processed_document_count"] == 2
     assert result["duplicate_document_count"] == 1
-    assert result["document_count"] == 1
+    assert result["document_count"] == 2
+    assert len({chunk["metadata"]["document_id"] for chunk in builds[0]["chunks"]}) == 2
     assert len(builds) == 1
+
+
+def test_duplicate_copy_is_promoted_when_original_document_is_removed(tmp_path, monkeypatch):
+    from services.rag_api.document import ingest
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    original = docs_dir / "a.txt"
+    copy = docs_dir / "b.txt"
+    original.write_text("相同的知识库内容", encoding="utf-8")
+    copy.write_text("相同的知识库内容", encoding="utf-8")
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    builds = _capture_generation_builds(ingest, monkeypatch)
+
+    first = ingest.ingest_knowledge_base()
+    original.unlink()
+    second = ingest.ingest_knowledge_base()
+
+    assert first["document_count"] == 2
+    assert first["duplicate_document_count"] == 1
+    assert second["document_count"] == 1
+    assert second["processed_document_count"] == 0
+    assert second["skipped_document_count"] == 1
+    assert {chunk["metadata"]["source_file"] for chunk in builds[-1]["chunks"]} == {"b.txt"}
+
+
+def test_version_replacement_records_previous_version_tombstone(tmp_path, monkeypatch):
+    from services.rag_api import index_generation
+    from services.rag_api.document import ingest
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    document_path = docs_dir / "policy.txt"
+    document_path.write_text("版本一", encoding="utf-8")
+    _configure_incremental_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(docs_dir, tmp_path))
+    monkeypatch.setattr(ingest, "load_rag_settings", lambda: RagSettings(chunk_size=200, chunk_overlap=20))
+    _capture_generation_builds(ingest, monkeypatch)
+
+    ingest.ingest_knowledge_base()
+    manifest_path = docs_dir / ".crabrag-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["documents"][0]["version"] = "2"
+    manifest["documents"][0]["updated_at"] = "2026-07-11T00:00:00Z"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    document_path.write_text("版本二", encoding="utf-8")
+
+    result = ingest.ingest_knowledge_base()
+    generation_manifest = index_generation.load_generation_manifest(result["generation_id"])
+
+    assert any(
+        item["document_version"] == "1" and item["reason"] == "version_replaced"
+        for item in generation_manifest["tombstones"]
+    )
 
 
 def test_incremental_ingest_reprocesses_when_pipeline_fingerprint_changes(tmp_path, monkeypatch):
@@ -348,6 +411,7 @@ def test_split_documents_uses_content_addressed_chunk_ids_and_metadata():
                 "doc_id": "doc-abc",
                 "document_id": "doc-abc",
                 "version": "2",
+                "publish_status": "published",
                 "effective_at": "2026-07-01T00:00:00Z",
                 "updated_at": "2026-07-02T00:00:00Z",
                 "policy_ref": "policy-sales",
@@ -370,6 +434,7 @@ def test_split_documents_uses_content_addressed_chunk_ids_and_metadata():
     assert chunks[0]["metadata"]["chunk_id"] == chunks[0]["id"]
     assert len(chunks[0]["metadata"]["chunk_hash"]) == 64
     assert chunks[0]["metadata"]["document_version"] == "2"
+    assert chunks[0]["metadata"]["publish_status"] == "published"
     assert chunks[0]["metadata"]["effective_at"] == "2026-07-01T00:00:00Z"
     assert chunks[0]["metadata"]["policy_ref"] == "policy-sales"
     assert chunks[0]["metadata"]["acl_revision"] == "7"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -278,17 +279,33 @@ def test_ingest_uses_multiple_docs_dirs_and_returns_all_dirs(tmp_path, monkeypat
             "embedded_chunk_count": len(chunks),
         },
     )
-    monkeypatch.setattr(ingest, "save_kb_categories", lambda documents, chunks, path=None: {"items": [], "categories": []})
+    def save_categories(documents, chunks, path=None):
+        if path is not None:
+            path.write_text('{"items": [], "categories": []}', encoding="utf-8")
+        return {"items": [], "categories": []}
+
+    monkeypatch.setattr(ingest, "save_kb_categories", save_categories)
     monkeypatch.setattr(ingest, "read_app_config", lambda: (_ for _ in ()).throw(AssertionError("rebuild must not read common questions")), raising=False)
     monkeypatch.setattr(ingest, "generate_common_questions", lambda category_payload: (_ for _ in ()).throw(AssertionError("rebuild must not generate common questions")), raising=False)
     monkeypatch.setattr(ingest, "write_common_questions", lambda questions: (_ for _ in ()).throw(AssertionError("rebuild must not overwrite common questions")), raising=False)
     monkeypatch.setattr(ingest, "ensure_knowledge_base_name", lambda category_payload, documents, chunk_count: ("测试知识库", "test"))
-    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", lambda category_payload, documents, chunks, path=None: {})
-    monkeypatch.setattr(ingest, "build_and_save_kb_graph", lambda category_payload, documents, chunks, path=None: {"nodes": [{"id": "客户准入"}], "edges": [{"id": "edge-1"}]}, raising=False)
+    def save_schema(category_payload, documents, chunks, path=None):
+        if path is not None:
+            path.write_text("{}", encoding="utf-8")
+        return {}
+
+    def save_graph(category_payload, documents, chunks, path=None):
+        payload = {"nodes": [{"id": "客户准入"}], "edges": [{"id": "edge-1"}]}
+        if path is not None:
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return payload
+
+    monkeypatch.setattr(ingest, "generate_graph_schema_suggestion", save_schema)
+    monkeypatch.setattr(ingest, "build_and_save_kb_graph", save_graph, raising=False)
     monkeypatch.setattr(
         ingest,
         "index_graph_vectors_generation",
-        lambda nodes, edges, generation_id: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
+        lambda nodes, edges, generation_id, full_rebuild=False: {"graph_entity_index_count": len(nodes), "graph_relationship_index_count": len(edges)},
     )
 
     result = ingest.ingest_knowledge_base()

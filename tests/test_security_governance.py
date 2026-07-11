@@ -54,6 +54,29 @@ def test_conversation_memory_isolated_by_subject_and_generation():
     assert conversation_memory.get_history("session", subject="u-2", generation_id="gen-1") == []
 
 
+def test_conversation_memory_isolated_by_permission_revision():
+    from services.rag_api.memory import conversation_memory
+
+    conversation_memory.SESSION_MEMORY.clear()
+    conversation_memory.update_memory(
+        "session",
+        "secret question",
+        "secret answer",
+        "",
+        [],
+        subject="u-1",
+        generation_id="gen-1",
+        permission_fingerprint="permission-v1",
+    )
+
+    assert conversation_memory.get_history(
+        "session", subject="u-1", generation_id="gen-1", permission_fingerprint="permission-v1"
+    )
+    assert conversation_memory.get_history(
+        "session", subject="u-1", generation_id="gen-1", permission_fingerprint="permission-v2"
+    ) == []
+
+
 def test_vector_search_applies_allowed_document_filter_before_query(monkeypatch):
     from services.rag_api.security import PrincipalContext, RetrievalContext, use_retrieval_context
     from services.rag_api.vector import chroma_store
@@ -332,7 +355,12 @@ def test_chat_binds_trusted_principal_generation_and_memory(monkeypatch):
     assert response.json()["index_generation"] == "gen-2"
     assert captured["principal"].subject == "user-1"
     assert captured["context"].generation_id == "gen-2"
-    assert conversation_memory.get_history("session", subject="user-1", generation_id="gen-2")
+    assert conversation_memory.get_history(
+        "session",
+        subject="user-1",
+        generation_id="gen-2",
+        permission_fingerprint="permission-2",
+    )
     assert response.json()["references"] == [{"document_id": "doc-a"}]
     assert response.json()["relation_paths"] == [{"document_id": "doc-a", "path": "a"}]
 

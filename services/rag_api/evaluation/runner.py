@@ -10,14 +10,24 @@ from services.rag_api.agent.graph import run_qa
 from services.rag_api.agent.heuristics import heuristic_classify, heuristic_tool_choice
 from services.rag_api.agent.tools import dispatch_retrieval
 from services.rag_api.config import get_settings
-from services.rag_api.document.ingest import ingest_knowledge_base
 from services.rag_api.document.categories import get_category_names
+from services.rag_api.document import doc_status
+from services.rag_api.document.multi_vector import expand_multi_vector_chunks
+from services.rag_api.document.splitter import split_documents
 from services.rag_api.evaluation.profiles import build_evaluation_profiles, evaluation_collection_names, serialize_profile
 from services.rag_api.evaluation.questions import generate_evaluation_question_set
 from services.rag_api.evaluation.scoring import attach_baseline_deltas, build_overall_summary, score_case, score_profile
 from services.rag_api.evaluation import storage
 from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, override_rag_settings
-from services.rag_api.vector.chroma_store import collection_status, override_collection_name
+from services.rag_api.vector.chroma_store import add_chunks, collection_status, override_collection_name
+from services.rag_api import index_generation
+from services.rag_api.security import (
+    PrincipalContext,
+    RetrievalContext,
+    build_retrieval_context,
+    current_retrieval_context,
+    use_retrieval_context,
+)
 
 ProgressCallback = Callable[[dict], None]
 
@@ -29,6 +39,17 @@ def get_evaluation_total_units(question_set: dict | None = None) -> int:
 
 
 def run_evaluation(
+    run_id: str | None = None,
+    progress_callback: ProgressCallback | None = None,
+    question_set: dict | None = None,
+    retrieval_context: RetrievalContext | None = None,
+) -> dict:
+    context = retrieval_context or current_retrieval_context() or build_retrieval_context(PrincipalContext.anonymous())
+    with use_retrieval_context(context):
+        return _run_evaluation(run_id=run_id, progress_callback=progress_callback, question_set=question_set)
+
+
+def _run_evaluation(
     run_id: str | None = None,
     progress_callback: ProgressCallback | None = None,
     question_set: dict | None = None,
@@ -101,8 +122,12 @@ def run_evaluation(
         }
         serialized_profiles.append(payload)
     attach_baseline_deltas(serialized_profiles)
+    security_context = current_retrieval_context()
     result = {
         "run_id": run_id,
+        "generation_id": security_context.generation_id if security_context else "legacy",
+        "subject": security_context.principal.subject if security_context else "anonymous",
+        "permission_fingerprint": security_context.permission_fingerprint if security_context else "",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "profile_count": len(serialized_profiles),
         "question_count": len(questions),
@@ -121,10 +146,12 @@ def ensure_evaluation_collection(profile: dict) -> None:
     collection_name = profile.get("collection_name")
     if not collection_name:
         return
-    with override_rag_settings(profile["settings"]), override_collection_name(collection_name):
+    target_name = _evaluation_collection_name(profile)
+    with override_rag_settings(profile["settings"]), override_collection_name(target_name):
+        chunks = _evaluation_chunks(profile["settings"])
         status = collection_status()
-        if status.get("count", 0) <= 0:
-            ingest_knowledge_base()
+        if int(status.get("count", 0)) != len(chunks):
+            add_chunks(chunks)
 
 
 def _run_case(run_id: str, profile: dict, question: dict) -> dict:
@@ -132,7 +159,7 @@ def _run_case(run_id: str, profile: dict, question: dict) -> dict:
     state = {"session_id": session_id, "question": question["question"], "history": question.get("history", []), "trace": []}
     started = time.perf_counter()
     try:
-        with override_rag_settings(profile["settings"]), override_collection_name(profile.get("collection_name")):
+        with override_rag_settings(profile["settings"]), override_collection_name(_evaluation_collection_name(profile)):
             if get_settings().use_local_models:
                 result = _run_local_retrieval_case(state, profile)
             else:
@@ -242,3 +269,38 @@ def _format_retrieval_only_answer(intent: str, references: list[dict]) -> str:
         for index, chunk in enumerate(references, start=1)
     )
     return f"【业务类别】\n{intent}\n\n【答复】\n评测模式仅汇总检索证据，不调用本地大模型生成最终答案。\n\n【参考知识库原文片段】\n{refs}"
+
+
+def _evaluation_collection_name(profile: dict) -> str | None:
+    collection_name = profile.get("collection_name")
+    if not collection_name:
+        return None
+    context = current_retrieval_context()
+    generation_id = context.generation_id if context else index_generation.active_generation_id()
+    if not generation_id or generation_id == "legacy":
+        raise RuntimeError("评测专用索引要求已发布的治理索引代")
+    return f"{collection_name}__{generation_id}"
+
+
+def _evaluation_chunks(rag_settings) -> list[dict]:
+    generation_id = (current_retrieval_context() or build_retrieval_context(PrincipalContext.anonymous())).generation_id
+    manifest_path = index_generation.generation_artifact_path(generation_id, "doc_status.json")
+    snapshot_dir = index_generation.generation_artifact_path(generation_id, "snapshots")
+    manifest = doc_status.load_manifest(manifest_path)
+    documents: list[dict] = []
+    for document_id, record in sorted((manifest.get("documents") or {}).items()):
+        if record.get("status") != doc_status.PROCESSED:
+            continue
+        snapshot = doc_status.load_snapshot(str(document_id), snapshot_dir)
+        document = (snapshot or {}).get("document")
+        if isinstance(document, dict):
+            documents.append(document)
+    chunks = expand_multi_vector_chunks(
+        split_documents(documents, chunk_size=rag_settings.chunk_size, chunk_overlap=rag_settings.chunk_overlap),
+        rag_settings,
+    )
+    embedding_fingerprint = doc_status.embedding_fingerprint(get_settings())
+    for chunk in chunks:
+        chunk.setdefault("metadata", {})["embedding_fingerprint"] = embedding_fingerprint
+        chunk["metadata"]["generation_id"] = generation_id
+    return chunks

@@ -39,31 +39,36 @@ def infer_document_category(source_file: str, text: str = "") -> str:
 
 
 def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, Any]], path: Path | None = None) -> dict[str, Any]:
-    doc_categories = {doc["source_file"]: infer_document_category(doc["source_file"], doc.get("content", "")) for doc in documents}
-    document_ids = {
-        doc["source_file"]: str(doc.get("document_id") or doc.get("doc_id") or "")
+    document_rows = [
+        (
+            str(doc.get("document_id") or doc.get("doc_id") or ""),
+            str(doc.get("source_file") or ""),
+            infer_document_category(str(doc.get("source_file") or ""), doc.get("content", "")),
+            doc,
+        )
         for doc in documents
-    }
+    ]
+    doc_categories = {document_id: category for document_id, _, category, _ in document_rows if document_id}
     chunk_counter: Counter[str] = Counter()
     source_files: dict[str, set[str]] = defaultdict(set)
-    document_counter: Counter[str] = Counter(doc_categories.values())
+    document_sources: dict[str, dict[str, str]] = defaultdict(dict)
+    document_counter: Counter[str] = Counter(category for _, _, category, _ in document_rows)
     keyword_hits: dict[str, list[str]] = defaultdict(list)
     keyword_hits_by_document: dict[str, dict[str, list[str]]] = defaultdict(dict)
     chunk_counts_by_document: dict[str, Counter[str]] = defaultdict(Counter)
 
-    for doc in documents:
-        category = doc_categories[doc["source_file"]]
-        source_files[category].add(doc["source_file"])
-        keyword_hits[category].extend(_matched_keywords(doc["source_file"], doc.get("content", "")))
-        document_id = document_ids.get(doc["source_file"], "")
+    for document_id, source_file, category, doc in document_rows:
+        source_files[category].add(source_file)
+        keyword_hits[category].extend(_matched_keywords(source_file, doc.get("content", "")))
         if document_id:
-            keyword_hits_by_document[category][document_id] = _matched_keywords(doc["source_file"], doc.get("content", ""))
+            document_sources[category][document_id] = source_file
+            keyword_hits_by_document[category][document_id] = _matched_keywords(source_file, doc.get("content", ""))
 
     for chunk in chunks:
         meta = chunk.get("metadata", {})
-        category = meta.get("category") or doc_categories.get(meta.get("source_file", ""), "合规审核")
+        document_id = str(meta.get("document_id") or meta.get("doc_id") or "")
+        category = meta.get("category") or doc_categories.get(document_id, "合规审核")
         chunk_counter[category] += 1
-        document_id = str(meta.get("document_id") or meta.get("doc_id") or document_ids.get(meta.get("source_file", ""), ""))
         if document_id:
             chunk_counts_by_document[category][document_id] += 1
         if meta.get("source_file"):
@@ -81,9 +86,8 @@ def save_kb_categories(documents: list[dict[str, Any]], chunks: list[dict[str, A
                 "keyword_hits": sorted(set(keyword_hits.get(name, []))),
                 "document_sources": sorted(
                     [
-                        {"document_id": document_ids[source_file], "source_file": source_file}
-                        for source_file in source_files.get(name, set())
-                        if document_ids.get(source_file)
+                        {"document_id": document_id, "source_file": source_file}
+                        for document_id, source_file in document_sources.get(name, {}).items()
                     ],
                     key=lambda item: item["document_id"],
                 ),

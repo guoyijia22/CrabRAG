@@ -20,21 +20,26 @@ def build_and_save_kb_graph(
 
 
 def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, Any]:
-    document_text = {str(doc.get("source_file") or ""): str(doc.get("content") or "") for doc in documents if doc.get("source_file")}
-    document_ids = {
-        str(doc.get("source_file") or ""): str(doc.get("document_id") or doc.get("doc_id") or "")
+    documents_by_id = {
+        str(doc.get("document_id") or doc.get("doc_id") or ""): doc
         for doc in documents
-        if doc.get("source_file")
+        if doc.get("document_id") or doc.get("doc_id")
     }
-    chunk_counts = Counter(str(chunk.get("metadata", {}).get("source_file") or "") for chunk in chunks)
+    filename_counts = Counter(str(doc.get("source_file") or "") for doc in documents if doc.get("source_file"))
+    chunk_counts_by_document = Counter(
+        str(chunk.get("metadata", {}).get("document_id") or chunk.get("metadata", {}).get("doc_id") or "")
+        for chunk in chunks
+    )
+    chunk_counts_by_file = Counter(str(chunk.get("metadata", {}).get("source_file") or "") for chunk in chunks)
     nodes: dict[str, dict[str, Any]] = {}
-    edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+    edges: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
     for item in category_payload.get("items", []) or []:
         category = str(item.get("name") or "").strip()
         if not category:
             continue
-        source_files = [str(source_file) for source_file in item.get("source_files", []) or [] if source_file]
+        document_sources = _category_document_sources(item, documents)
+        source_files = sorted({source["source_file"] for source in document_sources if source.get("source_file")})
         _merge_node(
             nodes,
             {
@@ -43,54 +48,58 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                 "type": "知识分类",
                 "category": category,
                 "source_files": source_files,
-                "document_ids": [document_ids[source_file] for source_file in source_files if document_ids.get(source_file)],
-                "document_sources": [
-                    {"document_id": document_ids[source_file], "source_file": source_file}
-                    for source_file in source_files
-                    if document_ids.get(source_file)
-                ],
+                "document_ids": [source["document_id"] for source in document_sources if source.get("document_id")],
+                "document_sources": document_sources,
                 "evidence_count": int(item.get("chunk_count") or 0),
                 "chunk_count": int(item.get("chunk_count") or 0),
                 "document_count": int(item.get("document_count") or len(source_files)),
+                "chunk_counts_by_document": item.get("chunk_counts_by_document", {}) or {},
             },
         )
-        for source_file in source_files:
-            source_chunk_count = int(chunk_counts.get(source_file, 0))
+        for document_source in document_sources:
+            source_file = str(document_source.get("source_file") or "")
+            document_id = str(document_source.get("document_id") or "")
+            document = documents_by_id.get(document_id, {})
+            source_chunk_count = int(
+                chunk_counts_by_document.get(document_id, 0) if document_id else chunk_counts_by_file.get(source_file, 0)
+            )
+            source_node_id = source_file if filename_counts.get(source_file, 0) <= 1 else f"{source_file}::{document_id}"
             _merge_node(
                 nodes,
                 {
-                    "id": source_file,
+                    "id": source_node_id,
                     "label": source_file,
                     "type": "来源文件",
                     "category": category,
                     "source_files": [source_file],
-                    "document_ids": [document_ids[source_file]] if document_ids.get(source_file) else [],
+                    "document_ids": [document_id] if document_id else [],
                     "document_sources": (
-                        [{"document_id": document_ids[source_file], "source_file": source_file}]
-                        if document_ids.get(source_file)
+                        [{"document_id": document_id, "source_file": source_file}]
+                        if document_id
                         else []
                     ),
                     "evidence_count": source_chunk_count,
                     "chunk_count": source_chunk_count,
                     "document_count": 1,
+                    "chunk_counts_by_document": {document_id: source_chunk_count} if document_id else {},
                 },
             )
             _merge_edge(
                 edges,
                 {
                     "source": category,
-                    "target": source_file,
+                    "target": source_node_id,
                     "label": "包含文件",
                     "relation": "包含文件",
                     "description": f"{category} 分类包含来源文件 {source_file}",
                     "evidence": source_file,
                     "source_file": source_file,
-                    "document_id": document_ids.get(source_file, ""),
+                    "document_id": document_id,
                     "graph_source": "generated_from_kb",
                     "confidence": 0.9,
                 },
             )
-            for topic in extract_source_topics(source_file, document_text.get(source_file, "")):
+            for topic in extract_source_topics(source_file, str(document.get("content") or "")):
                 _merge_node(
                     nodes,
                     {
@@ -99,26 +108,27 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                         "type": "主题实体",
                         "category": category,
                         "source_files": [source_file],
-                        "document_ids": [document_ids[source_file]] if document_ids.get(source_file) else [],
+                        "document_ids": [document_id] if document_id else [],
                         "document_sources": (
-                            [{"document_id": document_ids[source_file], "source_file": source_file}]
-                            if document_ids.get(source_file)
+                            [{"document_id": document_id, "source_file": source_file}]
+                            if document_id
                             else []
                         ),
                         "evidence_count": 1,
+                        "chunk_counts_by_document": {document_id: 1} if document_id else {},
                     },
                 )
                 _merge_edge(
                     edges,
                     {
-                        "source": source_file,
+                        "source": source_node_id,
                         "target": topic,
                         "label": "提及主题",
                         "relation": "提及主题",
                         "description": f"{source_file} 提及主题 {topic}",
                         "evidence": source_file,
                         "source_file": source_file,
-                        "document_id": document_ids.get(source_file, ""),
+                        "document_id": document_id,
                         "graph_source": "generated_from_kb",
                         "confidence": 0.85,
                     },
@@ -133,7 +143,7 @@ def build_kb_graph(category_payload: dict[str, Any], documents: list[dict[str, A
                         "description": f"{topic} 关联到知识分类 {category}",
                         "evidence": source_file,
                         "source_file": source_file,
-                        "document_id": document_ids.get(source_file, ""),
+                        "document_id": document_id,
                         "graph_source": "generated_from_kb",
                         "confidence": 0.8,
                     },
@@ -167,6 +177,28 @@ def extract_source_topics(source_file: str, text: str = "") -> list[str]:
     return _dedupe(topics)
 
 
+def _category_document_sources(item: dict[str, Any], documents: list[dict[str, Any]]) -> list[dict[str, str]]:
+    explicit = [
+        {
+            "document_id": str(source.get("document_id") or ""),
+            "source_file": str(source.get("source_file") or ""),
+        }
+        for source in item.get("document_sources", []) or []
+        if source.get("source_file")
+    ]
+    if explicit:
+        return explicit
+    source_files = {str(source_file) for source_file in item.get("source_files", []) or [] if source_file}
+    return [
+        {
+            "document_id": str(doc.get("document_id") or doc.get("doc_id") or ""),
+            "source_file": str(doc.get("source_file") or ""),
+        }
+        for doc in documents
+        if str(doc.get("source_file") or "") in source_files
+    ]
+
+
 def _merge_node(nodes: dict[str, dict[str, Any]], node: dict[str, Any]) -> None:
     node_id = str(node.get("id") or "").strip()
     if not node_id:
@@ -198,9 +230,15 @@ def _merge_node(nodes: dict[str, dict[str, Any]], node: dict[str, Any]) -> None:
     existing["document_count"] = max(int(existing.get("document_count") or 0), int(node.get("document_count") or 0))
 
 
-def _merge_edge(edges: dict[tuple[str, str, str], dict[str, Any]], edge: dict[str, Any]) -> None:
-    key = (str(edge.get("source") or ""), str(edge.get("label") or ""), str(edge.get("target") or ""))
-    if all(key):
+def _merge_edge(edges: dict[tuple[str, str, str, str], dict[str, Any]], edge: dict[str, Any]) -> None:
+    evidence_source = str(edge.get("document_id") or edge.get("source_file") or "")
+    key = (
+        str(edge.get("source") or ""),
+        str(edge.get("label") or ""),
+        str(edge.get("target") or ""),
+        evidence_source,
+    )
+    if all(key[:3]):
         edges.setdefault(key, edge)
 
 
@@ -221,7 +259,9 @@ def _finalize_edge(edge: dict[str, Any]) -> dict[str, Any]:
     source = str(edge.get("source") or "")
     target = str(edge.get("target") or "")
     label = str(edge.get("label") or edge.get("relation") or "")
-    return {"id": f"{source}->{label}->{target}", **edge}
+    evidence_source = str(edge.get("document_id") or edge.get("source_file") or "")
+    suffix = f"::document::{evidence_source}" if evidence_source else ""
+    return {"id": f"{source}->{label}->{target}{suffix}", **edge}
 
 
 def _quoted_terms(text: str) -> list[str]:

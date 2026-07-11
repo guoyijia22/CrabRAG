@@ -101,24 +101,24 @@ def build_generation_chunks(
     target = client.get_or_create_collection(name=target_name, metadata={"hnsw:space": "cosine"})
     reusable = {} if full_rebuild else _load_reusable_embeddings(client, settings.collection_name)
     embeddings: list[list[float] | None] = [None] * len(chunks)
-    missing_indexes: list[int] = []
+    missing_by_key: dict[tuple[str, str, str | None], list[int]] = {}
     for index, chunk in enumerate(chunks):
         metadata = chunk.setdefault("metadata", {})
         metadata["generation_id"] = generation_id
         key = _embedding_reuse_key(chunk["content"], metadata)
         embedding = reusable.get(key)
         if embedding is None:
-            embedding = reusable.get((key[0], key[1], None))
-        if embedding is None:
-            missing_indexes.append(index)
+            missing_by_key.setdefault(key, []).append(index)
         else:
             embeddings[index] = list(embedding)
 
-    if missing_indexes:
-        missing_documents = [chunks[index]["content"] for index in missing_indexes]
+    if missing_by_key:
+        representative_indexes = [indexes[0] for indexes in missing_by_key.values()]
+        missing_documents = [chunks[index]["content"] for index in representative_indexes]
         generated = _embed_in_batches(missing_documents, progress_callback=progress_callback)
-        for index, embedding in zip(missing_indexes, generated):
-            embeddings[index] = embedding
+        for indexes, embedding in zip(missing_by_key.values(), generated):
+            for index in indexes:
+                embeddings[index] = embedding
 
     if chunks:
         final_embeddings = [list(embedding or []) for embedding in embeddings]
@@ -134,8 +134,8 @@ def build_generation_chunks(
         raise RuntimeError(f"索引代写入数量不一致：expected={len(chunks)}, actual={target.count()}")
     return {
         "chunk_count": len(chunks),
-        "reused_embedding_count": len(chunks) - len(missing_indexes),
-        "embedded_chunk_count": len(missing_indexes),
+        "reused_embedding_count": len(chunks) - len(missing_by_key),
+        "embedded_chunk_count": len(missing_by_key),
     }
 
 
@@ -191,6 +191,26 @@ def cleanup_obsolete_generations() -> dict[str, Any]:
     return LAST_CLEANUP_STATUS
 
 
+def validate_generation_collections(generation_id: str, manifest: dict[str, Any]) -> None:
+    client = _get_chroma_client()
+    base = get_settings().collection_name
+    stats = manifest.get("stats", {}) or {}
+    expected_counts = {
+        "text": int(stats.get("chunk_count") or 0),
+        "graph_entity": int(stats.get("graph_entity_index_count") or 0),
+        "graph_relationship": int(stats.get("graph_relationship_index_count") or 0),
+    }
+    for kind, expected in expected_counts.items():
+        name = index_generation.generation_collection_name(base, generation_id, kind)
+        try:
+            collection = client.get_collection(name=name)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"索引代集合缺失：{name}") from exc
+        actual = int(collection.count())
+        if actual != expected:
+            raise ValueError(f"索引代集合数量不一致：{name}, expected={expected}, actual={actual}")
+
+
 @contextmanager
 def override_collection_name(collection_name: str | None):
     token = _COLLECTION_OVERRIDE.set(collection_name)
@@ -211,25 +231,31 @@ def _collection_name() -> str:
 
 
 def _load_reusable_embeddings(client, base_collection_name: str) -> dict[tuple[str, str, str | None], list[float]]:
-    active_generation = index_generation.active_generation_id()
-    source_name = (
-        index_generation.generation_collection_name(base_collection_name, active_generation, "text")
-        if active_generation
-        else base_collection_name
-    )
-    try:
-        source = client.get_or_create_collection(name=source_name, metadata={"hnsw:space": "cosine"})
-        result = source.get(include=["documents", "metadatas", "embeddings"])
-    except Exception:
-        return {}
-    documents = result.get("documents") or []
-    metadatas = result.get("metadatas") or []
-    raw_embeddings = result.get("embeddings")
-    embeddings = list(raw_embeddings) if raw_embeddings is not None else []
     reusable: dict[tuple[str, str, str | None], list[float]] = {}
-    for document, metadata, embedding in zip(documents, metadatas, embeddings):
-        key = _embedding_reuse_key(str(document or ""), metadata or {})
-        reusable.setdefault(key, [float(value) for value in embedding])
+    state = index_generation.load_index_state()
+    generation_ids = [
+        str(value)
+        for value in (state.get("active_generation"), state.get("previous_generation"))
+        if value
+    ]
+    source_names = (
+        [index_generation.generation_collection_name(base_collection_name, generation_id, "text") for generation_id in generation_ids]
+        if generation_ids
+        else [base_collection_name]
+    )
+    for source_name in source_names:
+        try:
+            source = client.get_or_create_collection(name=source_name, metadata={"hnsw:space": "cosine"})
+            result = source.get(include=["documents", "metadatas", "embeddings"])
+        except Exception:
+            continue
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        raw_embeddings = result.get("embeddings")
+        embeddings = list(raw_embeddings) if raw_embeddings is not None else []
+        for document, metadata, embedding in zip(documents, metadatas, embeddings):
+            key = _embedding_reuse_key(str(document or ""), metadata or {})
+            reusable.setdefault(key, [float(value) for value in embedding])
     return reusable
 
 

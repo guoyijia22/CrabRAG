@@ -7,12 +7,13 @@ from datetime import datetime
 from services.rag_api.evaluation import storage
 from services.rag_api.evaluation.questions import generate_evaluation_question_set
 from services.rag_api.evaluation.runner import get_evaluation_total_units, run_evaluation
+from services.rag_api.security import PrincipalContext, RetrievalContext, build_retrieval_context, use_retrieval_context
 
 _RUNNING_LOCK = threading.Lock()
 _RUNNING_RUN_ID: str | None = None
 
 
-def start_evaluation_run() -> dict:
+def start_evaluation_run(retrieval_context: RetrievalContext | None = None) -> dict:
     global _RUNNING_RUN_ID
     worker: threading.Thread | None = None
     with _RUNNING_LOCK:
@@ -28,6 +29,9 @@ def start_evaluation_run() -> dict:
         run_id = f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         progress = {
             "run_id": run_id,
+            "generation_id": retrieval_context.generation_id if retrieval_context else "",
+            "subject": retrieval_context.principal.subject if retrieval_context else "anonymous",
+            "permission_fingerprint": retrieval_context.permission_fingerprint if retrieval_context else "",
             "status": "queued",
             "percent": 0,
             "completed_units": 0,
@@ -41,7 +45,7 @@ def start_evaluation_run() -> dict:
         }
         storage.save_evaluation_progress(progress)
         _RUNNING_RUN_ID = run_id
-        worker = threading.Thread(target=_run_background, args=(run_id, None), daemon=True)
+        worker = threading.Thread(target=_run_background, args=(run_id, None, retrieval_context), daemon=True)
     worker.start()
     return _with_progress_url(progress)
 
@@ -62,7 +66,11 @@ def get_active_evaluation_progress() -> dict:
     return {"status": "idle"}
 
 
-def _run_background(run_id: str, question_set: dict | None = None) -> None:
+def _run_background(
+    run_id: str,
+    question_set: dict | None = None,
+    retrieval_context: RetrievalContext | None = None,
+) -> None:
     global _RUNNING_RUN_ID
 
     def record(update: dict) -> None:
@@ -73,17 +81,24 @@ def _run_background(run_id: str, question_set: dict | None = None) -> None:
         storage.save_evaluation_progress(payload)
 
     try:
-        record({"status": "running", "message": "正在生成动态评测题集"})
-        if question_set is None:
-            question_set = generate_evaluation_question_set()
-        record(
-            {
-                "status": "running",
-                "total_units": get_evaluation_total_units(question_set),
-                "message": "动态题集已生成，开始执行评测",
-            }
-        )
-        run_evaluation(run_id=run_id, progress_callback=record, question_set=question_set)
+        context = retrieval_context or build_retrieval_context(PrincipalContext.anonymous())
+        with use_retrieval_context(context):
+            record({"status": "running", "message": "正在生成动态评测题集"})
+            if question_set is None:
+                question_set = generate_evaluation_question_set()
+            record(
+                {
+                    "status": "running",
+                    "total_units": get_evaluation_total_units(question_set),
+                    "message": "动态题集已生成，开始执行评测",
+                }
+            )
+            run_evaluation(
+                run_id=run_id,
+                progress_callback=record,
+                question_set=question_set,
+                retrieval_context=context,
+            )
     except Exception as exc:  # noqa: BLE001
         record(
             {

@@ -55,6 +55,7 @@ def test_index_rollback_requires_admin_and_swaps_generations(tmp_path, monkeypat
 
     index_generation = _configure_index(tmp_path, monkeypatch)
     monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN", "trusted")
+    monkeypatch.setattr(main, "validate_generation_collections", lambda generation_id, manifest: None)
     client = TestClient(main.app)
 
     forbidden = client.post(
@@ -69,3 +70,18 @@ def test_index_rollback_requires_admin_and_swaps_generations(tmp_path, monkeypat
     assert forbidden.status_code == 403
     assert rolled_back.status_code == 200
     assert index_generation.load_index_state()["active_generation"] == "gen-1"
+
+
+def test_index_management_logs_and_evaluations_reject_non_admin(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from services.rag_api import main
+
+    _configure_index(tmp_path, monkeypatch)
+    monkeypatch.setenv("CRABRAG_INTERNAL_TOKEN", "trusted")
+    client = TestClient(main.app)
+    headers = {"x-crabrag-internal-token": "trusted", "x-crabrag-subject": "user"}
+
+    assert client.post("/api/ingest", headers=headers).status_code == 403
+    assert client.get("/api/logs", headers=headers).status_code == 403
+    assert client.get("/api/evaluations", headers=headers).status_code == 403

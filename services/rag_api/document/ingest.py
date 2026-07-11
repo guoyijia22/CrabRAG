@@ -49,12 +49,14 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     scanned_files = scan_supported_files(docs_dirs)
     build_cutoff = datetime.now(timezone.utc)
     generation_id = index_generation.new_generation_id(build_cutoff)
+    index_generation.record_generation_resources(generation_id, settings.collection_name)
     catalog = load_active_catalog(docs_dirs, scanned_files, cutoff=build_cutoff)
     active_documents = {Path(item["path"]).resolve(): item for item in catalog["documents"]}
     files = sorted(active_documents, key=lambda path: str(path).lower())
     source_manifest_path = index_generation.active_artifact_path("doc_status.json", doc_status.DOC_STATUS_PATH)
     source_snapshot_dir = index_generation.active_artifact_path("snapshots", doc_status.DOC_SNAPSHOT_DIR)
     staging_snapshot_dir = index_generation.generation_artifact_path(generation_id, "snapshots")
+    staging_snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest = doc_status.load_manifest(source_manifest_path)
     fingerprint = doc_status.pipeline_fingerprint(settings, rag_settings)
     embedding_fingerprint = doc_status.embedding_fingerprint(settings)
@@ -87,7 +89,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
 
     chunk_size = rag_settings.chunk_size
     chunk_overlap = rag_settings.chunk_overlap
-    content_index = _unchanged_content_index(files, file_hashes, records, fingerprint, active_documents)
+    content_index: dict[str, str] = {}
     progress(2, "读取解析", f"已读取 {len(files)} 份文档，正在准备切片")
 
     for path in files:
@@ -95,10 +97,16 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
         doc_id = str(governance["document_id"])
         manifest_revision = _manifest_revision(governance)
         previous = records.get(doc_id)
+        if previous and str(previous.get("document_version") or "") != str(governance["version"]):
+            tombstones.append(
+                {
+                    "document_id": doc_id,
+                    "document_version": str(previous.get("document_version") or ""),
+                    "deleted_at": catalog["build_cutoff"],
+                    "reason": "version_replaced",
+                }
+            )
         file_hash = file_hashes[path]
-        if _can_reuse_duplicate(previous, file_hash, fingerprint, manifest_revision):
-            duplicate_count += 1
-            continue
         if _can_reuse_snapshot(previous, file_hash, fingerprint, manifest_revision):
             snapshot = doc_status.load_snapshot(doc_id, source_snapshot_dir)
             if snapshot:
@@ -107,7 +115,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 documents_by_id[doc_id] = document
                 chunks_by_id[doc_id] = chunks
                 if previous.get("content_hash"):
-                    content_index[str(previous["content_hash"])] = doc_id
+                    content_index.setdefault(str(previous["content_hash"]), doc_id)
                 skipped_count += 1
                 continue
 
@@ -116,17 +124,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
             content_hash = doc_status.hash_content(document.get("content", ""))
             duplicate_of = content_index.get(content_hash)
             if duplicate_of and duplicate_of != doc_id:
-                records[doc_id] = doc_status.duplicate_record(
-                    doc_id=doc_id,
-                    path=path,
-                    file_hash=file_hash,
-                    content_hash=content_hash,
-                    duplicate_of=duplicate_of,
-                    fingerprint=fingerprint,
-                )
-                records[doc_id].update(_governance_record(governance, manifest_revision))
                 duplicate_count += 1
-                continue
 
             document = {
                 **document,
@@ -135,6 +133,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
                 "content_hash": content_hash,
                 "file_hash": file_hash,
                 "version": str(governance["version"]),
+                "publish_status": str(governance["status"]),
                 "effective_at": str(governance["effective_at"]),
                 "updated_at": str(governance["updated_at"]),
                 "document_revision": doc_status.hash_content(f"{manifest_revision}:{content_hash}"),
@@ -159,7 +158,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
             doc_status.save_snapshot(doc_id, document, chunks, staging_snapshot_dir)
             documents_by_id[doc_id] = document
             chunks_by_id[doc_id] = chunks
-            content_index[content_hash] = doc_id
+            content_index.setdefault(content_hash, doc_id)
             processed_count += 1
         except Exception as exc:  # noqa: BLE001
             records[doc_id] = doc_status.failed_record(
@@ -225,7 +224,12 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
         chunks,
         path=index_generation.generation_artifact_path(generation_id, "graph.json"),
     )
-    graph_index_stats = index_graph_vectors_generation(kb_graph.get("nodes", []), kb_graph.get("edges", []), generation_id)
+    graph_index_stats = index_graph_vectors_generation(
+        kb_graph.get("nodes", []),
+        kb_graph.get("edges", []),
+        generation_id,
+        full_rebuild=full_rebuild,
+    )
     progress(
         6 + vector_batch_units,
         "生成图谱索引",
@@ -247,6 +251,14 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
         generation_id,
         {
             "permission_schema_version": 1,
+            "required_artifacts": [
+                "categories.json",
+                "graph.json",
+                "graph_schema_suggestion.json",
+                "doc_status.json",
+                "snapshots",
+                "resources.json",
+            ],
             "build_cutoff": catalog["build_cutoff"],
             "next_activation_at": catalog["next_activation_at"],
             "pipeline_fingerprint": fingerprint,
@@ -309,16 +321,6 @@ def _can_reuse_snapshot(previous: dict[str, Any] | None, file_hash: str, fingerp
     )
 
 
-def _can_reuse_duplicate(previous: dict[str, Any] | None, file_hash: str, fingerprint: str, manifest_revision: str) -> bool:
-    return bool(
-        previous
-        and previous.get("status") == doc_status.DUPLICATE
-        and previous.get("file_hash") == file_hash
-        and previous.get("pipeline_fingerprint") == fingerprint
-        and previous.get("manifest_revision") == manifest_revision
-    )
-
-
 def _snapshot_payload(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     document = snapshot.get("document")
     chunks = snapshot.get("chunks")
@@ -329,30 +331,6 @@ def _ordered_values(items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return [items[key] for key in sorted(items)]
 
 
-def _unchanged_content_index(
-    files: list[Path],
-    file_hashes: dict[Path, str],
-    records: dict[str, Any],
-    fingerprint: str,
-    active_documents: dict[Path, dict[str, Any]],
-) -> dict[str, str]:
-    index: dict[str, str] = {}
-    for path in files:
-        governance = active_documents[path]
-        doc_id = str(governance["document_id"])
-        record = records.get(doc_id)
-        if (
-            record
-            and record.get("status") == doc_status.PROCESSED
-            and record.get("file_hash") == file_hashes[path]
-            and record.get("pipeline_fingerprint") == fingerprint
-            and record.get("manifest_revision") == _manifest_revision(governance)
-            and record.get("content_hash")
-        ):
-            index[str(record["content_hash"])] = doc_id
-    return index
-
-
 def _manifest_revision(governance: dict[str, Any]) -> str:
     payload = {
         "document_id": governance.get("document_id"),
@@ -360,6 +338,8 @@ def _manifest_revision(governance: dict[str, Any]) -> str:
         "status": governance.get("status"),
         "effective_at": governance.get("effective_at"),
         "updated_at": governance.get("updated_at"),
+        "path": str(governance.get("path") or ""),
+        "knowledge_base_id": str(governance.get("knowledge_base_id") or ""),
         "acl": governance.get("acl"),
     }
     return doc_status.hash_content(json.dumps(payload, ensure_ascii=False, sort_keys=True))

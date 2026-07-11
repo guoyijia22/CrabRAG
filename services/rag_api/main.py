@@ -25,7 +25,7 @@ from services.rag_api.memory.conversation_memory import get_history, update_memo
 from services.rag_api.model_api_settings import public_model_api_settings, update_model_api_settings
 from services.rag_api.rag_settings import RagSettings, load_rag_settings, save_rag_settings
 from services.rag_api.schemas import ChatRequest, ChatResponse, ConfigUpdateRequest, ModelApiSettingsRequest, ModelApiSettingsResponse, SettingsResponse
-from services.rag_api.vector.chroma_store import collection_status
+from services.rag_api.vector.chroma_store import collection_status, validate_generation_collections
 from services.rag_api import index_generation
 from services.rag_api.index_scheduler import INDEX_SCHEDULER
 from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
@@ -78,6 +78,7 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
                     session_id,
                     subject=principal.subject,
                     generation_id=retrieval_context.generation_id,
+                    permission_fingerprint=retrieval_context.permission_fingerprint,
                 ),
                 "trace": [],
             }
@@ -92,10 +93,17 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         state.get("entities", []),
         subject=principal.subject,
         generation_id=retrieval_context.generation_id,
+        permission_fingerprint=retrieval_context.permission_fingerprint,
     )
     append_qa_log(
         {
             "session_id": session_id,
+            "subject": principal.subject,
+            "generation_id": retrieval_context.generation_id,
+            "permission_fingerprint": retrieval_context.permission_fingerprint,
+            "document_ids": sorted(
+                {str(item.get("document_id") or "") for item in references if item.get("document_id")}
+            ),
             "question": request.question,
             "intent": state.get("intent", ""),
             "question_type": state.get("question_type", ""),
@@ -132,27 +140,32 @@ def _authorized_references(references: list[dict], allowed_document_ids: frozens
 
 
 @app.post("/api/ingest")
-def ingest() -> dict:
+def ingest(http_request: Request) -> dict:
+    _require_index_admin(http_request)
     return start_ingest_run()
 
 
 @app.post("/api/ingest/run")
-def run_ingest() -> dict:
+def run_ingest(http_request: Request) -> dict:
+    _require_index_admin(http_request)
     return start_ingest_run()
 
 
 @app.post("/api/ingest/full")
-def full_ingest() -> dict:
+def full_ingest(http_request: Request) -> dict:
+    _require_index_admin(http_request)
     return start_ingest_run(full_rebuild=True)
 
 
 @app.get("/api/ingest/active")
-def active_ingest() -> dict:
+def active_ingest(http_request: Request) -> dict:
+    _require_index_admin(http_request)
     return get_active_ingest_progress()
 
 
 @app.get("/api/ingest/{run_id}/progress")
-def ingest_progress(run_id: str) -> dict:
+def ingest_progress(run_id: str, http_request: Request) -> dict:
+    _require_index_admin(http_request)
     payload = read_ingest_progress(run_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="ingest progress not found")
@@ -160,7 +173,8 @@ def ingest_progress(run_id: str) -> dict:
 
 
 @app.get("/api/ingest/{run_id}")
-def ingest_result(run_id: str) -> dict:
+def ingest_result(run_id: str, http_request: Request) -> dict:
+    _require_index_admin(http_request)
     payload = read_ingest_result(run_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="ingest result not found")
@@ -177,6 +191,10 @@ def health() -> dict:
         chroma_state = f"ok:{status['count']}"
     except Exception:
         pass
+    try:
+        active_generation = index_generation.active_generation_id()
+    except index_generation.IndexStateError:
+        active_generation = "error"
     return {
         "web": "ok",
         "rag_service": "ok",
@@ -185,7 +203,7 @@ def health() -> dict:
         "docs_dirs": [str(path) for path in settings.docs_dirs],
         "chroma": chroma_state,
         "llm_api": "local_qwen_onnx" if settings.use_local_models else ("configured" if settings.api_key else "missing_api_key"),
-        "active_generation": index_generation.active_generation_id(),
+        "active_generation": active_generation,
         "index_scheduler": INDEX_SCHEDULER.status(),
     }
 
@@ -195,7 +213,10 @@ def index_status(http_request: Request) -> dict:
     principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
     if not principal.can_manage_index:
         raise HTTPException(status_code=403, detail="index management permission required")
-    state = index_generation.load_index_state()
+    try:
+        state = index_generation.load_index_state()
+    except index_generation.IndexStateError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     active = _generation_manifest_or_none(state.get("active_generation"))
     previous = _generation_manifest_or_none(state.get("previous_generation"))
     return {
@@ -214,7 +235,15 @@ def rollback_index(http_request: Request) -> dict:
     if not principal.can_manage_index:
         raise HTTPException(status_code=403, detail="index management permission required")
     try:
+        current_state = index_generation.load_index_state()
+        previous_generation = str(current_state.get("previous_generation") or "")
+        if previous_generation:
+            previous_manifest = index_generation.load_generation_manifest(previous_generation)
+            index_generation.validate_generation_artifacts(previous_generation, previous_manifest)
+            validate_generation_collections(previous_generation, previous_manifest)
         state = index_generation.rollback_generation()
+    except index_generation.IndexStateError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     RETRIEVAL_CACHE.clear()
@@ -328,6 +357,24 @@ def _request_retrieval_context(http_request: Request):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+def _require_index_admin(http_request: Request):
+    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    if not principal.can_manage_index:
+        raise HTTPException(status_code=403, detail="需要索引管理权限")
+    return principal
+
+
+def _admin_retrieval_context(http_request: Request):
+    _require_index_admin(http_request)
+    return _request_retrieval_context(http_request)[1]
+
+
+def _require_matching_evaluation(payload: dict, permission_fingerprint: str) -> dict:
+    if payload.get("permission_fingerprint") != permission_fingerprint:
+        raise HTTPException(status_code=403, detail="评测结果属于不同权限上下文")
+    return payload
+
+
 @app.get("/api/graph/schema")
 def graph_schema() -> dict:
     return load_graph_schema()
@@ -344,8 +391,9 @@ def update_graph_schema(payload: dict) -> dict:
 
 
 @app.get("/api/logs")
-def logs(intent: str | None = Query(default=None)) -> dict:
-    return {"items": read_qa_logs(intent)}
+def logs(http_request: Request, intent: str | None = Query(default=None)) -> dict:
+    context = _admin_retrieval_context(http_request)
+    return {"items": read_qa_logs(intent, permission_fingerprint=context.permission_fingerprint)}
 
 
 @app.get("/api/settings", response_model=SettingsResponse)
@@ -368,31 +416,45 @@ def update_rag_settings(settings: RagSettings) -> RagSettings:
 
 
 @app.post("/api/evaluations/run")
-def run_evaluations() -> dict:
-    return start_evaluation_run()
+def run_evaluations(http_request: Request) -> dict:
+    _, retrieval_context = _request_retrieval_context(http_request)
+    _require_index_admin(http_request)
+    return start_evaluation_run(retrieval_context)
 
 
 @app.get("/api/evaluations")
-def evaluations() -> dict:
-    return {"items": list_evaluation_runs()}
+def evaluations(http_request: Request) -> dict:
+    context = _admin_retrieval_context(http_request)
+    return {
+        "items": [
+            item for item in list_evaluation_runs()
+            if item.get("permission_fingerprint") == context.permission_fingerprint
+        ]
+    }
 
 
 @app.get("/api/evaluations/active")
-def active_evaluation() -> dict:
-    return get_active_evaluation_progress()
+def active_evaluation(http_request: Request) -> dict:
+    context = _admin_retrieval_context(http_request)
+    payload = get_active_evaluation_progress()
+    if payload.get("status") == "idle":
+        return payload
+    return _require_matching_evaluation(payload, context.permission_fingerprint)
 
 
 @app.get("/api/evaluations/{run_id}")
-def evaluation_detail(run_id: str) -> dict:
+def evaluation_detail(run_id: str, http_request: Request) -> dict:
+    context = _admin_retrieval_context(http_request)
     payload = read_evaluation_run(run_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="evaluation run not found")
-    return payload
+    return _require_matching_evaluation(payload, context.permission_fingerprint)
 
 
 @app.get("/api/evaluations/{run_id}/progress")
-def evaluation_progress(run_id: str) -> dict:
+def evaluation_progress(run_id: str, http_request: Request) -> dict:
+    context = _admin_retrieval_context(http_request)
     payload = read_evaluation_progress(run_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="evaluation progress not found")
-    return payload
+    return _require_matching_evaluation(payload, context.permission_fingerprint)
