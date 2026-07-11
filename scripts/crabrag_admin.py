@@ -580,12 +580,13 @@ def _run_state_process_matches(item: object, project_root: Path, ports: list[int
     executable = str(info.get("executable") or "")
     if not executable:
         return False
+    owned_ports = info.get("ports") if isinstance(info.get("ports"), list) else []
+    owns_configured_port = bool(owned_ports) and any(port in ports for port in owned_ports)
     try:
         Path(executable).resolve().relative_to(project_root.resolve())
     except ValueError:
-        if str(project_root.resolve()).casefold() not in command_line.casefold():
+        if str(project_root.resolve()).casefold() not in command_line.casefold() and not owns_configured_port:
             return False
-    owned_ports = info.get("ports") if isinstance(info.get("ports"), list) else []
     if owned_ports and not any(port in ports for port in owned_ports):
         return False
     return True

@@ -413,6 +413,26 @@ def test_stale_run_state_with_reused_unrelated_pid_does_not_block_restore(tmp_pa
     assert crabrag_admin.service_is_running(root) is False
 
 
+def test_global_bun_web_process_is_trusted_by_identity_role_and_owned_custom_port(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    item = {"pid": 456, "role": "web", "start_identity": "start-web"}
+    monkeypatch.setattr(crabrag_admin, "_process_is_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        crabrag_admin,
+        "_process_runtime_info",
+        lambda _pid: {
+            "command_line": "C:/Program Files/Bun/bun.exe server/gateway.js",
+            "executable": "C:/Program Files/Bun/bun.exe",
+            "start_identity": "start-web",
+            "ports": [3103],
+        },
+    )
+
+    assert crabrag_admin._run_state_process_matches(item, root, [3103, 8101]) is True
+
+
 def test_backup_rejects_reparse_point_in_protected_source_ancestor(tmp_path: Path, monkeypatch):
     from scripts import crabrag_admin
 
