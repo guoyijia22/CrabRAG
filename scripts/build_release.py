@@ -21,6 +21,8 @@ REQUIRED_FILES = (
     "README_ZH.md",
     "README_PORTABLE.md",
     "requirements.txt",
+    "package.json",
+    "bun.lock",
     "install.ps1",
     "install.sh",
     "run.ps1",

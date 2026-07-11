@@ -8,10 +8,12 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Callable, Iterable
 import unicodedata
 import uuid
@@ -521,11 +523,33 @@ def _validate_archive(archive: Path, extract_root: Path) -> dict[str, object]:
 def _process_is_alive(pid: int) -> bool:
     if pid <= 0 or pid == os.getpid():
         return False
+    if os.name == "nt":
+        return _windows_process_is_alive(pid)
     try:
         os.kill(pid, 0)
-    except (OSError, ValueError):
+    except (OSError, ValueError, SystemError):
         return False
     return True
+
+
+def _windows_process_is_alive(pid: int) -> bool:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError, ValueError):
+        return False
 
 
 def _process_runtime_info(pid: int) -> dict[str, object]:
@@ -671,6 +695,82 @@ def service_is_running(project_root: Path) -> bool:
     return _project_process_detected(root) or any(_port_is_open(port) for port in SERVICE_PORTS)
 
 
+def _terminate_process(pid: int) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise BackupError(f"failed to terminate process {pid}")
+        return
+    os.kill(pid, signal.SIGTERM)
+
+
+def stop_services(
+    project_root: Path,
+    *,
+    process_matches: Callable[[object, Path, list[int]], bool] = _run_state_process_matches,
+    is_alive: Callable[[int], bool] = _process_is_alive,
+    terminate: Callable[[int], None] = _terminate_process,
+    wait: Callable[[float], None] = time.sleep,
+    attempts: int = 20,
+) -> tuple[dict[str, object], int]:
+    root = project_root.resolve()
+    state_path = root / "data" / "run.json"
+    if not state_path.is_file():
+        return {"status": "stopped", "stopped": [], "remaining": [], "unverified": []}, EXIT_OK
+    state = _read_json(state_path)
+    try:
+        state_root = Path(str(state.get("project_root") or "")).resolve()
+    except OSError as exc:
+        raise BackupError("project run state is invalid") from exc
+    if state_root != root:
+        raise BackupError("project run state belongs to another project")
+    processes = state.get("processes")
+    if not isinstance(processes, list):
+        raise BackupError("project run state has no verifiable process identities")
+    ports = [port for port in (state.get("web_port"), state.get("api_port")) if isinstance(port, int)]
+    stopped: list[int] = []
+    unverified: list[int] = []
+    targets: list[int] = []
+    for item in processes:
+        pid = item.get("pid") if isinstance(item, dict) else None
+        if not isinstance(pid, int) or pid <= 0:
+            raise BackupError("project run state contains an invalid process id")
+        if not is_alive(pid):
+            continue
+        if not process_matches(item, root, ports):
+            unverified.append(pid)
+            continue
+        targets.append(pid)
+        try:
+            terminate(pid)
+            stopped.append(pid)
+        except (OSError, BackupError, subprocess.SubprocessError):
+            pass
+    remaining = [pid for pid in targets if is_alive(pid)]
+    for _ in range(max(attempts, 0)):
+        if not remaining:
+            break
+        wait(0.25)
+        remaining = [pid for pid in remaining if is_alive(pid)]
+    unverified = [pid for pid in unverified if is_alive(pid)]
+    payload = {
+        "status": "stopped" if not remaining and not unverified else "incomplete",
+        "stopped": stopped,
+        "remaining": remaining,
+        "unverified": unverified,
+    }
+    if remaining or unverified:
+        return payload, EXIT_ERROR
+    state_path.unlink(missing_ok=True)
+    return payload, EXIT_OK
+
+
 def _remove_path(path: Path) -> None:
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path)
@@ -773,6 +873,7 @@ def _parser() -> argparse.ArgumentParser:
     restore_parser = subparsers.add_parser("restore", help="restore a verified state backup")
     restore_parser.add_argument("--archive", type=Path, required=True)
     restore_parser.add_argument("--yes", action="store_true", dest="assume_yes")
+    subparsers.add_parser("stop", help="stop processes recorded for this CrabRAG project")
     return parser
 
 
@@ -797,6 +898,10 @@ def main(argv: list[str] | None = None) -> int:
                     payload["warning"] = "Backup contains plaintext secrets and owner-only permissions were not enforced; move it to protected storage immediately."
             print(json.dumps(payload, ensure_ascii=False))
             return EXIT_OK
+        if args.command == "stop":
+            payload, exit_code = stop_services(PROJECT_ROOT)
+            print(json.dumps(payload, ensure_ascii=False))
+            return exit_code
         result = restore_backup(PROJECT_ROOT, args.archive, assume_yes=args.assume_yes)
         print(json.dumps({"status": "ok", **result}, ensure_ascii=False))
         return EXIT_OK

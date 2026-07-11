@@ -476,6 +476,140 @@ def test_linux_global_bun_relative_gateway_is_trusted_when_cwd_matches_project(t
     assert crabrag_admin._run_state_process_matches(item, root, [3103, 8101]) is True
 
 
+def _write_run_state(root: Path, processes: list[dict]) -> Path:
+    path = root / "data" / "run.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"project_root": str(root.resolve()), "web_port": 3103, "api_port": 8101, "processes": processes}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_stop_terminates_verified_process_before_it_binds_a_port(tmp_path: Path):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    process = {"pid": 101, "role": "api", "start_identity": "api-start"}
+    state_path = _write_run_state(root, [process])
+    alive = {101: True}
+    terminated = []
+
+    payload, exit_code = crabrag_admin.stop_services(
+        root,
+        process_matches=lambda item, _root, _ports: item == process,
+        is_alive=lambda pid: alive[pid],
+        terminate=lambda pid: terminated.append(pid) or alive.__setitem__(pid, False),
+        wait=lambda _seconds: None,
+    )
+
+    assert exit_code == 0
+    assert terminated == [101]
+    assert payload["stopped"] == [101]
+    assert not state_path.exists()
+
+
+def test_stop_retains_run_state_when_only_part_of_generation_stops(tmp_path: Path):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    processes = [
+        {"pid": 101, "role": "api", "start_identity": "api-start"},
+        {"pid": 202, "role": "web", "start_identity": "web-start"},
+    ]
+    state_path = _write_run_state(root, processes)
+    alive = {101: True, 202: True}
+
+    payload, exit_code = crabrag_admin.stop_services(
+        root,
+        process_matches=lambda _item, _root, _ports: True,
+        is_alive=lambda pid: alive[pid],
+        terminate=lambda pid: alive.__setitem__(pid, False) if pid == 101 else None,
+        wait=lambda _seconds: None,
+        attempts=1,
+    )
+
+    assert exit_code != 0
+    assert payload["remaining"] == [202]
+    assert state_path.exists()
+
+
+def test_stop_does_not_kill_reused_pid_and_retains_run_state(tmp_path: Path):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    process = {"pid": 303, "role": "web", "start_identity": "old-start"}
+    state_path = _write_run_state(root, [process])
+    terminated = []
+
+    payload, exit_code = crabrag_admin.stop_services(
+        root,
+        process_matches=lambda _item, _root, _ports: False,
+        is_alive=lambda _pid: True,
+        terminate=terminated.append,
+        wait=lambda _seconds: None,
+        attempts=1,
+    )
+
+    assert exit_code != 0
+    assert payload["unverified"] == [303]
+    assert terminated == []
+    assert state_path.exists()
+
+
+def test_process_liveness_treats_windows_kill_systemerror_as_not_alive(monkeypatch):
+    from scripts import crabrag_admin
+
+    monkeypatch.setattr(crabrag_admin.os, "kill", lambda _pid, _signal: (_ for _ in ()).throw(SystemError("winerror")))
+
+    assert crabrag_admin._process_is_alive(999999) is False
+
+
+def test_stop_succeeds_when_launcher_removes_run_state_during_shutdown(tmp_path: Path):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    process = {"pid": 404, "role": "api", "start_identity": "api-start"}
+    state_path = _write_run_state(root, [process])
+    alive = {404: True}
+
+    def terminate(_pid: int):
+        alive[404] = False
+        state_path.unlink()
+
+    payload, exit_code = crabrag_admin.stop_services(
+        root,
+        process_matches=lambda _item, _root, _ports: True,
+        is_alive=lambda pid: alive[pid],
+        terminate=terminate,
+        wait=lambda _seconds: None,
+    )
+
+    assert exit_code == 0
+    assert payload["remaining"] == []
+
+
+def test_stop_ignores_unverified_process_that_exits_during_shutdown(tmp_path: Path):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    process = {"pid": 505, "role": "web", "start_identity": "web-start"}
+    state_path = _write_run_state(root, [process])
+    checks = iter([True, False])
+
+    payload, exit_code = crabrag_admin.stop_services(
+        root,
+        process_matches=lambda _item, _root, _ports: False,
+        is_alive=lambda _pid: next(checks),
+        terminate=lambda _pid: None,
+        wait=lambda _seconds: None,
+    )
+
+    assert exit_code == 0
+    assert payload["unverified"] == []
+    assert not state_path.exists()
+
+
 def test_backup_rejects_reparse_point_in_protected_source_ancestor(tmp_path: Path, monkeypatch):
     from scripts import crabrag_admin
 

@@ -27,14 +27,22 @@ jobs:
           bun install --frozen-lockfile
       - name: Build and test
         run: bun run check
-      - name: Installer smoke test
+      - name: Build release package
         shell: powershell
-        run: .\install.ps1
-      - name: Start and health smoke test
+        run: .\scripts\build_release.ps1 -Version 1.1.0 -OutputDir "$env:RUNNER_TEMP\crabrag-release"
+      - name: Release install, dependency, start, health, and stop smoke
         shell: powershell
         run: |
-          $process = Start-Process powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$pwd\run.ps1") -WorkingDirectory $pwd -PassThru -WindowStyle Hidden
+          $archive = "$env:RUNNER_TEMP\crabrag-release\CrabRAG-v1.1.0-windows-x64.zip"
+          $extractRoot = "$env:RUNNER_TEMP\crabrag-installed"
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
+          $releaseRoot = Join-Path $extractRoot "CrabRAG"
+          $process = $null
+          Push-Location $releaseRoot
           try {
+            .\install.ps1
+            bun -e "await import('@huggingface/transformers'); console.log('transformers-ok')"
+            $process = Start-Process powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$releaseRoot\run.ps1") -WorkingDirectory $releaseRoot -PassThru -WindowStyle Hidden
             $expectedVersion = (Get-Content -LiteralPath .\VERSION -Raw).Trim()
             $healthy = $false
             for ($attempt = 0; $attempt -lt 30; $attempt++) {
@@ -45,17 +53,21 @@ jobs:
               Start-Sleep -Seconds 1
             }
             if (-not $healthy) { throw "CrabRAG health smoke test failed" }
+            $stop = Start-Process -FilePath .\stop.bat -WorkingDirectory $releaseRoot -Wait -PassThru -WindowStyle Hidden
+            if ($stop.ExitCode -ne 0) { throw "CrabRAG stop smoke test failed" }
+            $process.WaitForExit(10000) | Out-Null
+            Start-Sleep -Seconds 1
+            $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in @(3003, 8001) }
+            if ($listeners -or (Test-Path -LiteralPath .\data\run.json)) { throw "CrabRAG release left runtime state behind" }
           } finally {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            if ($null -ne $process) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Seconds 2
             $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in @(3003, 8001) }
             foreach ($processId in ($listeners.OwningProcess | Sort-Object -Unique)) {
               Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
             }
+            Pop-Location
           }
-      - name: Validate release package
-        shell: powershell
-        run: .\scripts\build_release.ps1 -Version 1.1.0 -OutputDir "$env:RUNNER_TEMP\crabrag-release"
 
   ubuntu-python-310:
     runs-on: ubuntu-latest
@@ -76,7 +88,9 @@ jobs:
       - name: Shell syntax
         run: bash -n install.sh run.sh
       - name: Installer smoke test
-        run: ./install.sh
+        run: bash ./install.sh
+      - name: Runner invocation smoke test
+        run: bash ./run.sh --help
       - name: Build
         run: bun run build
       - name: Core tests

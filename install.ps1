@@ -36,6 +36,7 @@ $EnvPath = Join-Path $Root "config\.env"
 $PortableBun = Join-Path $Root "runtime\bun\bun.exe"
 $PortableBunDir = Join-Path $Root "runtime\bun"
 $PackageJson = Join-Path $Root "package.json"
+$ReleaseManifest = Join-Path $Root "release-manifest.json"
 $BunVersion = "1.3.14"
 $BunWindowsX64Sha256 = "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922"
 
@@ -227,7 +228,12 @@ try {
     if (Test-Path -LiteralPath $PackageJson) {
         Write-Step "Installing JavaScript dependencies with Bun."
         # Equivalent command: bun install
-        if (Test-Path (Join-Path $Root "bun.lock")) {
+        if (Test-Path -LiteralPath $ReleaseManifest) {
+            if (-not (Test-Path (Join-Path $Root "bun.lock"))) {
+                Fail "Release package is missing bun.lock."
+            }
+            & $bun install --production --frozen-lockfile
+        } elseif (Test-Path (Join-Path $Root "bun.lock")) {
             & $bun install --frozen-lockfile
         } else {
             & $bun install

@@ -17,6 +17,7 @@ ENV_FILE="$ROOT/config/.env"
 PORTABLE_BUN="$ROOT/runtime/bun/bun"
 PORTABLE_BUN_DIR="$ROOT/runtime/bun"
 PACKAGE_JSON="$ROOT/package.json"
+RELEASE_MANIFEST="$ROOT/release-manifest.json"
 BUN_VERSION="1.3.14"
 BUN_RELEASE_BASE_URL="https://github.com/oven-sh/bun/releases/download/bun-v1.3.14"
 BUN_LINUX_X64_SHA256="951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f"
@@ -199,7 +200,10 @@ log "Installing JavaScript dependencies with Bun."
 cd "$ROOT"
 if [[ -f "$PACKAGE_JSON" ]]; then
   # Equivalent command: bun install
-  if [[ -f "$ROOT/bun.lock" ]]; then
+  if [[ -f "$RELEASE_MANIFEST" ]]; then
+    [[ -f "$ROOT/bun.lock" ]] || fail "Release package is missing bun.lock."
+    "$BUN_BIN" install --production --frozen-lockfile
+  elif [[ -f "$ROOT/bun.lock" ]]; then
     "$BUN_BIN" install --frozen-lockfile
   else
     "$BUN_BIN" install

@@ -22,7 +22,7 @@ Double-click `stop.bat`.
 
 If you replace files in `docs\`, start the system and rebuild the knowledge base from the Knowledge page.
 
-Run `python scripts\crabrag_admin.py doctor --json` for structured diagnostics. Before an upgrade, use `python scripts\crabrag_admin.py backup --output backup.zip`. Stop the service before running `python scripts\crabrag_admin.py restore --archive backup.zip --yes`.
+Run `.\.venv\Scripts\python.exe scripts\crabrag_admin.py doctor --json` for structured diagnostics. Before an upgrade, use `.\.venv\Scripts\python.exe scripts\crabrag_admin.py backup --output backup.zip`. Stop the service before running `.\.venv\Scripts\python.exe scripts\crabrag_admin.py restore --archive backup.zip --yes`.
 Backup ZIP files may contain plaintext API credentials. Keep them in an owner-only location and do not upload them to source control or public storage.
 
 The release archive excludes tests, development source, caches, logs, user data, secrets, and local model files. The installer recreates required runtime directories and dependencies.

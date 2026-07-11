@@ -15,6 +15,7 @@
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_release.ps1"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.0.0-next.11",
     "hono": "4.12.29",
     "react": "19.2.7",
     "react-dom": "19.2.7"

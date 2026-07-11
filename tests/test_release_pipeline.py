@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import json
+import subprocess
 import zipfile
 
 import pytest
@@ -15,6 +17,8 @@ def _minimal_release_tree(root: Path) -> None:
         "README_ZH.md": "readme zh",
         "README_PORTABLE.md": "portable",
         "requirements.txt": "fastapi==1\n",
+        "package.json": json.dumps({"dependencies": {"@huggingface/transformers": "4.0.0-next.11"}}),
+        "bun.lock": "lockfileVersion = 1\n",
         "install.ps1": "Write-Host install",
         "install.sh": "#!/usr/bin/env bash\n",
         "run.ps1": "Write-Host run",
@@ -72,6 +76,9 @@ def test_release_builder_includes_runtime_files_and_excludes_development_and_use
     assert "CrabRAG/config/.env.example" in names
     assert "CrabRAG/scripts/check_env.py" in names
     assert "CrabRAG/scripts/stop.ps1" in names
+    assert "CrabRAG/package.json" in names
+    assert "CrabRAG/bun.lock" in names
+    assert not any("node_modules" in name for name in names)
     for forbidden in excluded:
         assert f"CrabRAG/{forbidden}" not in names
 
@@ -100,7 +107,12 @@ def test_release_powershell_wrapper_and_ci_contracts_are_present():
     assert "bun-version: '1.3.14'" in windows
     assert "bun run check" in windows
     assert "install.ps1" in windows and "install.sh" in windows
+    assert "bash ./install.sh" in windows
     assert "start" in windows.lower() and "health" in windows.lower()
+    assert "Expand-Archive" in windows
+    assert "CrabRAG-v1.1.0-windows-x64.zip" in windows
+    assert "@huggingface/transformers" in windows
+    assert "stop.bat" in windows and "run.json" in windows
     assert '"release:windows"' in package
 
 
@@ -110,9 +122,27 @@ def test_release_installer_and_stop_scripts_do_not_depend_on_excluded_developmen
     check_env = Path("scripts/check_env.py").read_text(encoding="utf-8")
     stop_bat = Path("stop.bat").read_text(encoding="utf-8")
 
-    assert "package.json" in install_ps1 and "Skipping JavaScript dependency install" in install_ps1
-    assert "package.json" in install_sh and "Skipping JavaScript dependency install" in install_sh
+    assert "release-manifest.json" in install_ps1 and "--production" in install_ps1 and "--frozen-lockfile" in install_ps1
+    assert "release-manifest.json" in install_sh and "--production" in install_sh and "--frozen-lockfile" in install_sh
     assert '"package.json",' not in check_env
     assert "scripts\\stop.ps1" in stop_bat
     assert Path("scripts/stop.ps1").is_file()
     assert "data\\run.json" in Path("scripts/stop.ps1").read_text(encoding="utf-8")
+
+
+def test_transformers_is_pinned_and_importable_with_bun():
+    package = json.loads(Path("package.json").read_text(encoding="utf-8"))
+    assert package["dependencies"]["@huggingface/transformers"] == "4.0.0-next.11"
+    bun = Path("runtime/bun/bun.exe")
+    if not bun.is_file():
+        pytest.skip("project-local Bun is unavailable")
+    result = subprocess.run(
+        [str(bun), "-e", "await import('@huggingface/transformers'); console.log('transformers-ok')"],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "transformers-ok" in result.stdout
