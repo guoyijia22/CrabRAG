@@ -127,10 +127,15 @@ def _reference_ids(reference: dict) -> set[str]:
     metadata = reference.get("metadata") or {}
     values = {
         "chunk": reference.get("chunk_id") or metadata.get("chunk_id"),
+        "matched_chunk": reference.get("matched_chunk_id") or metadata.get("matched_chunk_id"),
         "document": reference.get("document_id") or metadata.get("document_id"),
         "source": reference.get("source_file") or metadata.get("source_file"),
     }
-    return {f"{kind}:{str(value).strip()}" for kind, value in values.items() if str(value or "").strip()}
+    return {
+        f"{'chunk' if kind == 'matched_chunk' else kind}:{str(value).strip()}"
+        for kind, value in values.items()
+        if str(value or "").strip()
+    }
 
 
 def _reference_is_relevant(reference: dict, relevant_ids: set[str]) -> bool:

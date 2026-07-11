@@ -17,6 +17,7 @@ def test_evaluation_profiles_follow_new_retrieval_chain_terms():
         "rerank_enabled",
         "context_rewrite_enabled",
         "dynamic_top_k_enabled",
+        "parent_context_enabled",
         "multi_vector_enabled",
         "query_expansion_rerank",
         "context_rewrite_rerank",
@@ -27,6 +28,7 @@ def test_evaluation_profiles_follow_new_retrieval_chain_terms():
     assert "hybrid_bm25_enabled" not in enabled_switches
     assert "rag_param_tuning_enabled" not in enabled_switches
     assert "dynamic_top_k_enabled" in enabled_switches
+    assert "parent_context_enabled" in enabled_switches
     assert "混合检索" not in descriptions
     assert "BM25" not in descriptions
     assert "6 项优化" not in descriptions

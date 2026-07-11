@@ -397,6 +397,52 @@ def search_all_chunks() -> list[dict]:
     return [_chunk_payload(doc, meta, 0.0, "all") for doc, meta in zip(result.get("documents", []), result.get("metadatas", []))]
 
 
+def fetch_document_parent_chunks(parent_pairs: set[tuple[str, str]]) -> dict[tuple[str, str], dict]:
+    allowed_document_ids = _allowed_document_ids()
+    usable_pairs = {
+        (str(document_id), str(parent_chunk_id))
+        for document_id, parent_chunk_id in parent_pairs
+        if document_id
+        and parent_chunk_id
+        and (allowed_document_ids is None or str(document_id) in allowed_document_ids)
+    }
+    if not usable_pairs:
+        return {}
+    document_ids = sorted({document_id for document_id, _ in usable_pairs})
+    parent_chunk_ids = sorted({parent_chunk_id for _, parent_chunk_id in usable_pairs})
+    collection = get_collection()
+    result = collection.get(
+        where={
+            "$and": [
+                {"granularity": {"$eq": "document"}},
+                {"document_id": {"$in": document_ids}},
+                {"parent_chunk_id": {"$in": parent_chunk_ids}},
+            ]
+        },
+        include=["documents", "metadatas"],
+    )
+    parents: dict[tuple[str, str], dict] = {}
+    for item_id, document, metadata in zip(
+        result.get("ids", []),
+        result.get("documents", []),
+        result.get("metadatas", []),
+    ):
+        metadata = metadata or {}
+        if not _metadata_allowed(metadata, allowed_document_ids):
+            continue
+        pair = (
+            str(metadata.get("document_id") or metadata.get("doc_id") or ""),
+            str(metadata.get("parent_chunk_id") or ""),
+        )
+        if pair not in usable_pairs or str(metadata.get("granularity") or "") != "document":
+            continue
+        payload = _chunk_payload(str(document or ""), metadata, 0.0, "parent_lookup")
+        if not payload.get("chunk_id"):
+            payload["chunk_id"] = str(item_id)
+        parents[pair] = payload
+    return parents
+
+
 def search_chunks_by_keywords(query: str, intent: str, entities: list[str] | None = None, top_k: int = 2) -> list[dict]:
     chunks = search_all_chunks()
     entities = entities or []

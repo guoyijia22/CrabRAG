@@ -27,6 +27,11 @@ EVIDENCE_KEYS = [
     "score",
     "rerank_score",
     "retrieval_channel",
+    "document_id",
+    "chunk_id",
+    "granularity",
+    "matched_chunk_id",
+    "matched_granularity",
 ]
 
 

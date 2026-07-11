@@ -4,6 +4,7 @@ from services.rag_api.graph.graph_search import graph_relation_search
 from services.rag_api.exceptions import IndexCollectionUnavailable
 from services.rag_api.rag_settings import get_retrieval_top_k, load_rag_settings, resolve_retrieval_top_k
 from services.rag_api.retrieval.optimizations import apply_query_expansion, apply_rerank, keyword_search_candidates
+from services.rag_api.retrieval.parent_context import apply_parent_context
 from services.rag_api.retrieval.cache import RETRIEVAL_CACHE, retrieval_cache_key
 from services.rag_api.security import current_retrieval_context
 from services.rag_api.vector.chroma_store import search_all_chunks, search_chunks
@@ -19,6 +20,7 @@ def vector_rule_search(
     allow_query_expansion: bool = True,
     allow_rerank: bool = True,
     allow_keyword_search: bool = True,
+    allow_parent_context: bool = True,
 ) -> dict:
     rag_settings = load_rag_settings()
     top_k = int(resolve_retrieval_top_k(query, rag_settings)["effective_top_k"])
@@ -35,6 +37,9 @@ def vector_rule_search(
             vector_results.extend(search_chunks(expanded_query, intent, entities, top_k=top_k))
         candidate_k = _candidate_count(rag_settings, top_k)
         vector_results = _merge_chunks(vector_results, top_k=candidate_k)
+        if allow_parent_context:
+            vector_results, parent_trace = apply_parent_context(vector_results, rag_settings)
+            trace.append({"node": "parent_context", "output": parent_trace})
         if not allow_keyword_search:
             trace.append({"node": "hybrid_bm25", "output": {"enabled": False, "reason": "keyword_stream_used_by_hybrid_round_robin"}})
         else:
@@ -61,17 +66,22 @@ def vector_rule_search(
         return {"mode": "vector", "chunks": [], "relation_paths": [], "error": str(exc), "trace": trace}
 
 
-def graph_relation_search_tool(query: str, intent: str, entities: list[str]) -> dict:
+def graph_relation_search_tool(query: str, intent: str, entities: list[str], *, allow_parent_context: bool = True) -> dict:
     rag_settings = load_rag_settings()
     top_k = int(resolve_retrieval_top_k(query, rag_settings)["effective_top_k"])
     try:
         result = graph_relation_search(query, intent, top_k=top_k)
+        chunks = result["chunks"][:top_k]
+        trace = list(result.get("trace", []))
+        if allow_parent_context:
+            chunks, parent_trace = apply_parent_context(chunks, rag_settings)
+            trace.append({"node": "parent_context", "output": parent_trace})
         return {
             "mode": "graph",
-            "chunks": result["chunks"][:top_k],
+            "chunks": chunks,
             "relation_paths": result["relation_paths"][:top_k],
             "error": None,
-            "trace": result.get("trace", []),
+            "trace": trace,
         }
     except IndexCollectionUnavailable:
         raise
@@ -108,7 +118,7 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
     else:
         collection_errors: list[str] = []
         try:
-            graph_result = graph_relation_search_tool(query, intent, entities)
+            graph_result = graph_relation_search_tool(query, intent, entities, allow_parent_context=False)
         except IndexCollectionUnavailable as exc:
             collection_errors.append(str(exc))
             graph_result = {"mode": "graph", "chunks": [], "relation_paths": [], "error": str(exc), "trace": []}
@@ -120,6 +130,7 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
                 allow_query_expansion=allow_query_expansion,
                 allow_rerank=False,
                 allow_keyword_search=False,
+                allow_parent_context=False,
             )
         except IndexCollectionUnavailable as exc:
             collection_errors.append(str(exc))
@@ -143,6 +154,7 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
             ],
             top_k=candidate_k,
         )
+        merged_candidates, parent_trace = apply_parent_context(merged_candidates, rag_settings)
         trace = vector_result.get("trace", []) + graph_result.get("trace", []) + [
             {
                 "node": "hybrid_round_robin",
@@ -153,7 +165,8 @@ def dispatch_retrieval(query: str, intent: str, entities: list[str], selected_to
                     "merged_candidates": len(merged_candidates),
                     "keyword_error": keyword_error,
                 },
-            }
+            },
+            {"node": "parent_context", "output": parent_trace},
         ]
         if allow_rerank:
             chunks, rerank_trace = apply_rerank(query, merged_candidates, rag_settings, top_k=top_k)
