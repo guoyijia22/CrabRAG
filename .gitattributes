@@ -1,2 +1,6 @@
 *.sh text eol=lf
 server/gateway.js text eol=lf
+apps/web/index.html text eol=lf
+apps/web/dist/index.html text eol=lf
+apps/web/dist/assets/*.js text eol=lf
+apps/web/dist/assets/*.css text eol=lf

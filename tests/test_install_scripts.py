@@ -64,6 +64,15 @@ def test_linux_installation_paths_are_hardened_for_source_clones():
     assert "shutil.which(\"bun\")" in local_qwen
 
 
+def test_web_source_and_generated_artifacts_keep_lf_line_endings():
+    gitattributes = read_text(".gitattributes")
+
+    assert "apps/web/index.html text eol=lf" in gitattributes
+    assert "apps/web/dist/index.html text eol=lf" in gitattributes
+    assert "apps/web/dist/assets/*.js text eol=lf" in gitattributes
+    assert "apps/web/dist/assets/*.css text eol=lf" in gitattributes
+
+
 def test_run_scripts_start_api_and_gateway_with_project_environment():
     run_ps1 = read_text("run.ps1")
     run_sh = read_text("run.sh")
@@ -126,6 +135,8 @@ def test_installation_metadata_and_smoke_check_are_documented():
     assert "fastapi==0.136.1" in requirements
     assert "uvicorn[standard]==0.47.0" in requirements
     assert "onnxruntime==1.26.0" in requirements
+    assert "numpy==2.2.6" in requirements
+    assert "numpy==2.4.6" not in requirements
     assert "pytest==9.0.3" not in requirements
     assert "httpx==0.28.1" not in requirements
 
