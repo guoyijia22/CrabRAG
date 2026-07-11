@@ -685,9 +685,9 @@ def _project_process_detected(project_root: Path) -> bool:
 def service_is_running(project_root: Path) -> bool:
     root = project_root.resolve()
     status = _service_runtime_status(root)
-    if status["source"] == "run_state":
-        return bool(status["process_active"])
-    return _project_process_detected(root) or bool(status["complete"])
+    if status["source"] == "run_state" and status["process_active"]:
+        return True
+    return _project_process_detected(root) or any(_port_is_open(port) for port in SERVICE_PORTS)
 
 
 def _service_runtime_status(project_root: Path) -> dict[str, object]:

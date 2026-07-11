@@ -353,6 +353,32 @@ def test_service_running_detects_custom_ports_from_project_run_state(tmp_path: P
     assert crabrag_admin.service_is_running(root) is True
 
 
+def test_service_running_stale_matching_marker_falls_back_to_project_process_detection(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    processes = [{"pid": 123, "role": "api", "start_identity": "stale"}]
+    _write_run_state(root, processes)
+    monkeypatch.setattr(crabrag_admin, "_run_state_process_matches", lambda _item, _root, _ports: False)
+    monkeypatch.setattr(crabrag_admin, "_project_process_detected", lambda _root: True)
+    monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda _port: False)
+
+    assert crabrag_admin.service_is_running(root) is True
+
+
+def test_service_running_stale_marker_falls_back_to_any_open_default_port(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    processes = [{"pid": 123, "role": "api", "start_identity": "stale"}]
+    _write_run_state(root, processes)
+    monkeypatch.setattr(crabrag_admin, "_run_state_process_matches", lambda _item, _root, _ports: False)
+    monkeypatch.setattr(crabrag_admin, "_project_process_detected", lambda _root: False)
+    monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda port: port == 8001)
+
+    assert crabrag_admin.service_is_running(root) is True
+
+
 def test_run_scripts_publish_project_scoped_runtime_state():
     powershell = Path("run.ps1").read_text(encoding="utf-8")
     shell = Path("run.sh").read_text(encoding="utf-8")
