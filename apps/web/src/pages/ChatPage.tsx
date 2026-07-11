@@ -171,7 +171,7 @@ export function ChatPage({ settings, onSettingsChange }: ChatPageProps) {
 
       <section className="chat-panel">
         <div className="chat-hero">
-          <span className="eyebrow">CrabRAG · v1.1.0</span>
+          <span className="eyebrow">CrabRAG · {__CRABRAG_VERSION_LABEL__}</span>
           <h1>{settings.system_name}</h1>
           <p>{text.intro}</p>
           <div className="category-list">{names.map((name) => <span className="tag" key={name}>{name}</span>)}</div>

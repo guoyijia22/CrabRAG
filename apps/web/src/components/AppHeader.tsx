@@ -40,7 +40,7 @@ export function AppHeader({ settings, page, busy, onPageChange, onSettingsChange
   return (
     <header className="topbar">
       <div className="brand-block">
-        <span className="app-version">v1.1.0</span>
+        <span className="app-version">{__CRABRAG_VERSION_LABEL__}</span>
         {editing ? (
           <input aria-label={language === "zh" ? "系统名称" : "System name"} value={name} onChange={(event) => setName(event.target.value)} />
         ) : (

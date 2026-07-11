@@ -23,6 +23,7 @@ from services.rag_api.graph.schema_config import load_graph_schema, load_graph_s
 from services.rag_api.logging_utils.qa_logger import append_qa_log, read_qa_logs
 from services.rag_api.memory.conversation_memory import get_history, update_memory
 from services.rag_api.model_api_settings import public_model_api_settings, update_model_api_settings
+from services.rag_api.model_api_settings import build_local_model_status
 from services.rag_api.rag_settings import RagSettings, load_rag_settings, save_rag_settings
 from services.rag_api.schemas import ChatRequest, ChatResponse, ConfigUpdateRequest, ModelApiSettingsRequest, ModelApiSettingsResponse, SettingsResponse
 from services.rag_api.vector.chroma_store import collection_status, validate_generation_collections
@@ -35,6 +36,7 @@ from services.rag_api.security import (
     principal_from_headers,
     use_retrieval_context,
 )
+from services.rag_api.version import SOFTWARE_VERSION, build_info, onnxruntime_capability
 
 
 @asynccontextmanager
@@ -208,6 +210,29 @@ def health() -> dict:
         "llm_api": "local_qwen_onnx" if settings.use_local_models else ("configured" if settings.api_key else "missing_api_key"),
         "active_generation": active_generation,
         "index_scheduler": INDEX_SCHEDULER.status(),
+        "software_version": SOFTWARE_VERSION,
+        "build": build_info(),
+        "model_capabilities": {
+            "remote": {
+                "configured": bool(settings.api_key or settings.embedding_api_key or settings.rerank_api_key),
+            },
+            "local": local_model_capabilities(),
+        },
+    }
+
+
+def local_model_capabilities() -> dict:
+    status = build_local_model_status()
+    runtime = onnxruntime_capability()
+    return {
+        "available": bool(runtime["available"]) and status.missing_count == 0,
+        "runtime_available": runtime["available"],
+        "runtime_error_type": runtime["error_type"],
+        "missing_count": status.missing_count,
+        "models": [
+            {"key": model.key, "name": model.name, "present": model.present}
+            for model in status.models
+        ],
     }
 
 

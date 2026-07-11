@@ -262,7 +262,7 @@ export function SettingsPage({ language, onAppSettingsSaved }: SettingsPageProps
   return (
     <main className="settings-page page-card">
       <div className="page-heading">
-        <div><span className="eyebrow">CrabRAG · v1.1.0</span><h1>{text.title}</h1><p>{text.subtitle}</p></div>
+        <div><span className="eyebrow">CrabRAG · {__CRABRAG_VERSION_LABEL__}</span><h1>{text.title}</h1><p>{text.subtitle}</p></div>
         <div className="page-actions"><button type="button" onClick={() => { setRag({ ...defaultRagSettings }); setStatus({ key: "resetReady" }); }} disabled={!rag || saving}>{text.reset}</button><button className="primary-button" type="button" onClick={save} disabled={!app || !model || !rag || saving}>{saving ? text.saving : text.save}</button></div>
       </div>
       <div className="alert" role="status">{text[status.key]}{status.detail ? `: ${status.detail}` : ""}</div>

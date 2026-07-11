@@ -88,7 +88,7 @@ export function KnowledgePage({ language, governanceOnly = false }: KnowledgePag
   return (
     <main className="page-card">
       <div className="page-heading">
-        <div><span className="eyebrow">v1.1.0</span><h1>{governanceOnly ? text.governanceTitle : text.knowledgeTitle}</h1><p>{governanceOnly ? text.governanceIntro : text.knowledgeIntro}</p></div>
+        <div><span className="eyebrow">{__CRABRAG_VERSION_LABEL__}</span><h1>{governanceOnly ? text.governanceTitle : text.knowledgeTitle}</h1><p>{governanceOnly ? text.governanceIntro : text.knowledgeIntro}</p></div>
         <div className="page-actions">
           {!governanceOnly && <><button type="button" onClick={() => rebuild(false)} disabled={busy}>{text.incremental}</button><button type="button" onClick={() => rebuild(true)} disabled={busy}>{text.full}</button></>}
           <button type="button" onClick={load} disabled={busy}>{text.refresh}</button>
