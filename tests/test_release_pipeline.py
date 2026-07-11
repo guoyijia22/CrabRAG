@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import json
+import shutil
 import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -146,3 +148,41 @@ def test_transformers_is_pinned_and_importable_with_bun():
     )
     assert result.returncode == 0, result.stderr
     assert "transformers-ok" in result.stdout
+
+
+def test_windows_gateway_argument_preserves_an_absolute_path_with_spaces(tmp_path: Path):
+    powershell = shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell is unavailable")
+    directory = tmp_path / "Program Files" / "CrabRAG"
+    directory.mkdir(parents=True)
+    gateway = directory / "server" / "gateway.js"
+    gateway.parent.mkdir()
+    gateway.write_text("stub", encoding="utf-8")
+    recorder = directory / "record argv.py"
+    output = directory / "argv.json"
+    recorder.write_text(
+        "import json, pathlib, sys\npathlib.Path(sys.argv[2]).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    script = f"""
+$gatewayPath = '{str(gateway).replace("'", "''")}'
+$gatewayArgument = '\"' + $gatewayPath + '\"'
+$recorderArgument = '\"{str(recorder).replace("'", "''")}\"'
+$outputArgument = '\"{str(output).replace("'", "''")}\"'
+$process = Start-Process -FilePath '{sys.executable.replace("'", "''")}' -ArgumentList @($recorderArgument, $gatewayArgument, $outputArgument) -Wait -PassThru -WindowStyle Hidden
+exit $process.ExitCode
+"""
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(output.read_text(encoding="utf-8"))[0] == str(gateway)
+
+    source = Path("run.ps1").read_text(encoding="utf-8")
+    assert "$GatewayArgument" in source
+    assert "-ArgumentList @($GatewayArgument)" in source

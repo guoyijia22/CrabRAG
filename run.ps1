@@ -29,6 +29,7 @@ $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
 $PortablePython = Join-Path $Root "runtime\python\python.exe"
 $PortableBun = Join-Path $Root "runtime\bun\bun.exe"
 $GatewayPath = Join-Path $Root "server\gateway.js"
+$GatewayArgument = '"' + $GatewayPath + '"'
 $RunStatePath = Join-Path $Root "data\run.json"
 
 function Resolve-Python {
@@ -105,7 +106,7 @@ try {
     Start-Sleep -Seconds 2
 
     Write-Step "Starting web gateway on http://127.0.0.1:$WebPort"
-    $webProcess = Start-Process -FilePath $Bun -ArgumentList @($GatewayPath) -WorkingDirectory $Root -PassThru -NoNewWindow
+    $webProcess = Start-Process -FilePath $Bun -ArgumentList @($GatewayArgument) -WorkingDirectory $Root -PassThru -NoNewWindow
 
     $runState = @{
         schema_version = 1

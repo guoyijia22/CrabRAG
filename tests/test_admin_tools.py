@@ -458,7 +458,8 @@ def test_windows_runner_passes_absolute_gateway_path_to_bun():
     source = Path("run.ps1").read_text(encoding="utf-8")
 
     assert '$GatewayPath = Join-Path $Root "server\\gateway.js"' in source
-    assert '-ArgumentList @($GatewayPath)' in source
+    assert "$GatewayArgument" in source
+    assert '-ArgumentList @($GatewayArgument)' in source
 
 
 def test_linux_proc_runtime_info_includes_process_cwd(tmp_path: Path):
