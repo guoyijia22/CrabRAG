@@ -46,7 +46,7 @@ function Test-PythonCandidate {
         [string[]]$Arguments
     )
 
-    $versionCode = "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+    $versionCode = "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info < (3, 14) else 1)"
     try {
         & $Command @Arguments -c $versionCode *> $null
         if ($LASTEXITCODE -eq 0) {
@@ -64,9 +64,12 @@ function Find-Python {
         $candidates += [pscustomobject]@{ Command = $PortablePython; Arguments = @() }
     }
     $candidates += @(
-        [pscustomobject]@{ Command = "py"; Arguments = @("-3") },
         [pscustomobject]@{ Command = "python"; Arguments = @() },
-        [pscustomobject]@{ Command = "python3"; Arguments = @() }
+        [pscustomobject]@{ Command = "python3"; Arguments = @() },
+        [pscustomobject]@{ Command = "py"; Arguments = @("-3.13") },
+        [pscustomobject]@{ Command = "py"; Arguments = @("-3.12") },
+        [pscustomobject]@{ Command = "py"; Arguments = @("-3.11") },
+        [pscustomobject]@{ Command = "py"; Arguments = @("-3.10") }
     )
     foreach ($candidate in $candidates) {
         $found = Test-PythonCandidate -Command $candidate.Command -Arguments $candidate.Arguments
@@ -74,7 +77,7 @@ function Find-Python {
             return $found
         }
     }
-    Fail "Python 3.10+ was not found. Install Python from https://www.python.org/downloads/ and rerun .\install.ps1."
+    Fail "Supported Python 3.10-3.13 was not found. Python 3.14 is not yet supported. Install Python from https://www.python.org/downloads/ and rerun .\install.ps1."
 }
 
 function Require-Command {

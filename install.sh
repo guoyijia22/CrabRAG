@@ -34,7 +34,7 @@ fail() {
 
 linux_install_hint() {
   cat >&2 <<'EOF'
-Install Python 3.10+ and venv support first.
+Install Python 3.10-3.13 and venv support first. Python 3.14 is not yet supported.
 Ubuntu/Debian:
   sudo apt update && sudo apt install -y python3 python3-venv python3-pip
 CentOS/Rocky/AlmaLinux:
@@ -47,7 +47,7 @@ EOF
 python_ok() {
   "$1" - <<'PY' >/dev/null 2>&1
 import sys
-raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+raise SystemExit(0 if (3, 10) <= sys.version_info < (3, 14) else 1)
 PY
 }
 
@@ -167,7 +167,7 @@ else
   log "Created config/.env from config/.env.example."
 fi
 
-PYTHON_BIN="$(find_python)" || fail "Python 3.10+ was not found."
+PYTHON_BIN="$(find_python)" || fail "Supported Python 3.10-3.13 was not found; Python 3.14 is not yet supported."
 
 if [[ ! -x "$VENV_PYTHON" ]]; then
   log "Creating Python virtual environment in .venv."

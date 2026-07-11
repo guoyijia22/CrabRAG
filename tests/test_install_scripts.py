@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +141,9 @@ def test_installation_metadata_and_smoke_check_are_documented():
     assert "onnxruntime==1.26.0" in requirements
     assert "numpy==2.2.6" in requirements
     assert "numpy==2.4.6" not in requirements
+    assert "onnxruntime==1.23.2; python_version < '3.11'" in requirements
+    assert "onnxruntime==1.26.0; python_version >= '3.11'" in requirements
+    assert "\nonnxruntime==1.26.0\n" not in f"\n{requirements}"
     assert "pytest==9.0.3" not in requirements
     assert "httpx==0.28.1" not in requirements
 
@@ -172,6 +179,64 @@ def test_python_development_dependencies_are_pinned_separately():
     assert "-r requirements.txt" in development_requirements
     assert "pytest==9.0.3" in development_requirements
     assert "httpx==0.28.1" in development_requirements
+
+
+def _run_injected_find_python(tmp_path: Path, success_key: str) -> dict:
+    powershell = shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell is unavailable")
+    source = read_text("install.ps1")
+    functions = source[source.index("function Test-PythonCandidate"):source.index("function Require-Command")]
+    script_path = tmp_path / "test-find-python.ps1"
+    script_path.write_text(
+        "$PortablePython = 'missing-portable-python.exe'\n"
+        "$script:calls = @()\n"
+        f"{functions}\n"
+        "function Test-PythonCandidate {\n"
+        "  param([string]$Command, [string[]]$Arguments)\n"
+        "  $key = $Command + '|' + ($Arguments -join ',')\n"
+        "  $script:calls += $key\n"
+        f"  if ($key -eq '{success_key}') {{ return [pscustomobject]@{{ Command=$Command; Arguments=$Arguments }} }}\n"
+        "  return $null\n"
+        "}\n"
+        "$result = Find-Python\n"
+        "@{command=$result.Command; arguments=@($result.Arguments); calls=$script:calls} | ConvertTo-Json -Compress\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-File", str(script_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_windows_installer_prefers_supported_python_on_path(tmp_path: Path):
+    result = _run_injected_find_python(tmp_path, "python|")
+
+    assert result["command"] == "python"
+    assert result["calls"] == ["python|"]
+
+
+def test_windows_installer_rejects_unsupported_path_python_and_falls_back_to_launcher(tmp_path: Path):
+    install_ps1 = read_text("install.ps1")
+    result = _run_injected_find_python(tmp_path, "py|-3.12")
+
+    assert "(3, 10) <= sys.version_info < (3, 14)" in install_ps1
+    assert result["command"] == "py"
+    assert result["arguments"] == ["-3.12"]
+    assert result["calls"] == ["python|", "python3|", "py|-3.13", "py|-3.12"]
+
+
+def test_linux_installer_rejects_python_314_and_docs_state_supported_range():
+    install_sh = read_text("install.sh")
+    docs = "\n".join(read_text(name) for name in ("README.md", "README_ZH.md", "README_PORTABLE.md"))
+
+    assert "(3, 10) <= sys.version_info < (3, 14)" in install_sh
+    assert "3.10" in docs and "3.13" in docs and "3.14" in docs
 
 
 def test_local_qwen_runtime_pins_the_transformers_dependency():

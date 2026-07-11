@@ -9,7 +9,7 @@ Default URLs:
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.10 through 3.13 (Python 3.14 is not yet supported)
 - Internet access during dependency installation
 
 The installer uses Bun for the bundled web gateway. If Bun is not on `PATH`, the installer downloads a project-local Bun binary into `runtime/bun/`. Node.js, npm, and pnpm are detected for diagnostics only.
@@ -213,7 +213,7 @@ The local identity adapter reads `CRABRAG_SUBJECT`, `CRABRAG_ROLES`, `CRABRAG_GR
 
 ## Troubleshooting
 
-- `Python 3.10+ was not found`: install Python 3.10 or newer and rerun the installer.
+- `Supported Python 3.10-3.13 was not found`: install Python 3.10-3.13 and rerun the installer. Python 3.14 is not yet supported.
 - `Failed to install project-local Bun`: check network access to GitHub releases, or install Bun manually from <https://bun.sh/docs/installation>.
 - `Local ONNX runtime unavailable`: remote/API mode can still run. Install the correct ONNX runtime only if you need local embedding or rerank models.
 - `API port 8001 is already in use`: stop the process using that port or change the API port.

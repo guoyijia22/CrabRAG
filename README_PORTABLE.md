@@ -1,5 +1,7 @@
 # CrabRAG portable package
 
+Supported Python versions are 3.10 through 3.13. Python 3.14 is not yet supported.
+
 ## Start
 
 Double-click `start.bat`, then open:
