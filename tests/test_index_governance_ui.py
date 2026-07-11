@@ -64,14 +64,16 @@ def test_start_scripts_generate_shared_internal_token_when_missing():
     assert "secrets.token_urlsafe" in shell
 
 
-def test_governance_panel_is_loaded_as_readable_standalone_module():
+def test_governance_navigation_is_owned_by_rebuilt_react_source():
     html = (ROOT / "apps" / "web" / "dist" / "index.html").read_text(encoding="utf-8")
-    module = (ROOT / "apps" / "web" / "dist" / "index-governance.js").read_text(encoding="utf-8")
+    header = (ROOT / "apps" / "web" / "src" / "components" / "AppHeader.tsx").read_text(encoding="utf-8")
+    translations = (ROOT / "apps" / "web" / "src" / "i18n.ts").read_text(encoding="utf-8")
 
-    assert 'src="/index-governance.js"' in html
-    assert "crabrag-governance-panel" in module
-    assert "/api/index/status" in module
-    assert "/api/index/rollback" in module
+    assert 'src="/index-governance.js"' not in html
+    assert not (ROOT / "apps" / "web" / "dist" / "index-governance.js").exists()
+    assert '"governance"' in header
+    assert 'governance: "索引治理"' in translations
+    assert 'governance: "Index Governance"' in translations
 
 
 def test_index_governance_manifest_and_operations_are_documented():

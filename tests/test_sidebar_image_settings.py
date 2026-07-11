@@ -30,12 +30,15 @@ def test_app_settings_default_sidebar_image_url_is_blank():
 
 
 def test_frontend_uses_crab_as_default_and_persisted_image_as_override():
-    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+    source = Path("apps/web/src/pages/ChatPage.tsx").read_text(encoding="utf-8")
+    bundle = next(Path("apps/web/dist/assets").glob("index-*.js")).read_text(encoding="utf-8")
 
-    assert "function sidebarDefaultImage(){return`/picture/crab.png`}" in bundle
+    assert "function sidebarDefaultImage(){return`/picture/crab.png`}" in source
+    assert "/picture/crab.png" in bundle
     assert "1-clean.gif" not in bundle
     assert "2-clean.gif" not in bundle
-    assert "e.sidebar_image_url&&w(`${e.sidebar_image_url}?v=${Date.now()}`)" in bundle
+    assert "sidebar_image_url" in source
+    assert "?v=${Date.now()}" in source
     assert Path("apps/web/dist/picture/crab.png").is_file()
 
 

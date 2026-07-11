@@ -163,10 +163,12 @@ def test_python_development_dependencies_are_pinned_separately():
     assert "httpx==0.28.1" in development_requirements
 
 
-def test_transformers_dependency_uses_the_locked_resolved_version():
+def test_frontend_does_not_ship_the_unused_prerelease_transformers_dependency():
     package_json = json.loads(read_text("package.json"))
 
-    assert package_json["dependencies"]["@huggingface/transformers"] == "4.0.0-next.11"
+    assert "@huggingface/transformers" not in package_json["dependencies"]
+    assert package_json["dependencies"]["react"] == "19.2.7"
+    assert package_json["dependencies"]["react-dom"] == "19.2.7"
 
 
 def test_development_test_installation_is_documented_separately():

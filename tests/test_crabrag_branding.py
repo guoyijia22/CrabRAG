@@ -187,17 +187,39 @@ def test_default_web_port_is_3003():
 
 
 def test_frontend_top_nav_shows_app_version():
-    bundle_text = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
-    css_text = Path("apps/web/dist/assets/index-C1LwUchF.css").read_text(encoding="utf-8")
+    bundle_text = next(Path("apps/web/dist/assets").glob("index-*.js")).read_text(encoding="utf-8")
+    css_text = next(Path("apps/web/dist/assets").glob("index-*.css")).read_text(encoding="utf-8")
 
-    assert "className:`app-version`,children:`Ver1.01`" in bundle_text
+    assert "v1.1.0" in bundle_text
     assert ".app-version{color:#a8a8a8" in css_text
 
 
 def test_default_system_name_is_consistent_across_backend_gateway_and_frontend():
     gateway_text = Path("server/gateway.js").read_text(encoding="utf-8")
-    bundle_text = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+    app_source = Path("apps/web/src/App.tsx").read_text(encoding="utf-8")
+    bundle_text = next(Path("apps/web/dist/assets").glob("index-*.js")).read_text(encoding="utf-8")
 
     assert 'var DEFAULT_SYSTEM_NAME = "CrabRAG";' in gateway_text
-    assert "var fv=`CrabRAG`,pv=`red_white`;" in bundle_text
-    assert "system_name:`CrabRAG`" in bundle_text
+    assert 'system_name: "CrabRAG"' in app_source
+    assert "system_name:" in bundle_text
+    assert "CrabRAG" in bundle_text
+
+
+def test_frontend_has_rebuildable_react_typescript_source_and_pinned_versions():
+    package = Path("package.json").read_text(encoding="utf-8")
+
+    for source_name in ("App.tsx", "main.tsx", "i18n.ts", "styles.css"):
+        assert (Path("apps/web/src") / source_name).is_file()
+    assert (Path("apps/web/src/api") / "client.ts").is_file()
+    assert (Path("apps/web/src/pages") / "ChatPage.tsx").is_file()
+    assert (Path("apps/web/src/pages") / "SettingsPage.tsx").is_file()
+    for dependency in (
+        '"react": "19.2.7"',
+        '"react-dom": "19.2.7"',
+        '"vite": "8.1.4"',
+        '"typescript": "7.0.2"',
+        '"vitest": "4.1.10"',
+    ):
+        assert dependency in package
+    assert '"build:web"' in package
+    assert '"test:web"' in package
