@@ -1,4 +1,7 @@
 // @bun
+// server/bun_api/index.ts
+import { join as join3 } from "path";
+
 // node_modules/hono/dist/compose.js
 var compose = (middleware, onError, onNotFound) => {
   return (context, next) => {
@@ -46,18 +49,36 @@ var compose = (middleware, onError, onNotFound) => {
 // node_modules/hono/dist/request/constants.js
 var GET_MATCH_RESULT = /* @__PURE__ */ Symbol();
 
+// node_modules/hono/dist/utils/buffer.js
+var bufferToFormData = (arrayBuffer, contentType) => {
+  const response = new Response(arrayBuffer, {
+    headers: {
+      "Content-Type": contentType.replace(/^[^;]+/, (mediaType) => mediaType.toLowerCase())
+    }
+  });
+  return response.formData();
+};
+
 // node_modules/hono/dist/utils/body.js
+var isRawRequest = (request) => ("headers" in request);
 var parseBody = async (request, options = /* @__PURE__ */ Object.create(null)) => {
   const { all = false, dot = false } = options;
-  const headers = request instanceof HonoRequest ? request.raw.headers : request.headers;
+  const headers = isRawRequest(request) ? request.headers : request.raw.headers;
   const contentType = headers.get("Content-Type");
-  if (contentType?.startsWith("multipart/form-data") || contentType?.startsWith("application/x-www-form-urlencoded")) {
+  const mediaType = contentType?.split(";")[0].trim().toLowerCase();
+  if (mediaType === "multipart/form-data" || mediaType === "application/x-www-form-urlencoded") {
     return parseFormData(request, { all, dot });
   }
   return {};
 };
 async function parseFormData(request, options) {
-  const formData = await request.formData();
+  const headers = isRawRequest(request) ? request.headers : request.raw.headers;
+  const arrayBuffer = await request.arrayBuffer();
+  const formDataPromise = bufferToFormData(arrayBuffer, headers.get("Content-Type") || "");
+  if (!isRawRequest(request)) {
+    request.bodyCache.formData = formDataPromise;
+  }
+  const formData = await formDataPromise;
   if (formData) {
     return convertFormDataToBodyData(formData, options);
   }
@@ -1478,6 +1499,9 @@ var Node2 = class _Node2 {
             if (m) {
               params[name] = m[0];
               this.#pushHandlerSets(handlerSets, child, method, node.#params, params);
+              if (m[0].length === restPathString.length && child.#children["*"]) {
+                this.#pushHandlerSets(handlerSets, child.#children["*"], method, node.#params, params);
+              }
               if (hasChildren(child.#children)) {
                 child.#params = params;
                 const componentCount = m[0].match(/\//)?.length ?? 0;
@@ -1545,39 +1569,48 @@ var Hono2 = class extends Hono {
   }
 };
 
-// server/bun_api/index.ts
-import { join as join2 } from "path";
-
 // server/bun_api/config.ts
-import { join, resolve } from "path";
-var RAG_BASE_URL = process.env.RAG_BASE_URL ?? "http://127.0.0.1:8001";
-var CRABRAG_INTERNAL_TOKEN = process.env.CRABRAG_INTERNAL_TOKEN ?? "";
-var CRABRAG_SUBJECT = process.env.CRABRAG_SUBJECT ?? "local-user";
-var CRABRAG_ROLES = process.env.CRABRAG_ROLES ?? "";
-var CRABRAG_GROUPS = process.env.CRABRAG_GROUPS ?? "";
-var CRABRAG_PERMISSION_REVISION = process.env.CRABRAG_PERMISSION_REVISION ?? "1";
-var CRABRAG_LOCAL_ADMIN = (process.env.CRABRAG_LOCAL_ADMIN ?? "true").toLowerCase() !== "false";
-function ragHeaders(includeJson = false) {
+import { resolve } from "path";
+function readGatewayEnvironment(env = process.env) {
   return {
-    ...(includeJson ? { "content-type": "application/json" } : {}),
-    "x-crabrag-internal-token": CRABRAG_INTERNAL_TOKEN,
-    "x-crabrag-subject": CRABRAG_SUBJECT,
-    "x-crabrag-roles": CRABRAG_ROLES,
-    "x-crabrag-groups": CRABRAG_GROUPS,
-    "x-crabrag-permission-revision": CRABRAG_PERMISSION_REVISION,
-    "x-crabrag-admin": String(CRABRAG_LOCAL_ADMIN)
+    ragBaseUrl: env.RAG_BASE_URL ?? "http://127.0.0.1:8001",
+    internalToken: env.CRABRAG_INTERNAL_TOKEN ?? "",
+    subject: env.CRABRAG_SUBJECT ?? "local-user",
+    roles: env.CRABRAG_ROLES ?? "",
+    groups: env.CRABRAG_GROUPS ?? "",
+    permissionRevision: env.CRABRAG_PERMISSION_REVISION ?? "1",
+    localAdmin: (env.CRABRAG_LOCAL_ADMIN ?? "true").toLowerCase() !== "false",
+    projectRoot: resolve(env.CRABRAG_ROOT ?? env.ELCQA_ROOT ?? process.cwd()),
+    port: Number(env.PORT ?? 3003)
   };
 }
-var PROJECT_ROOT = resolve(process.env.CRABRAG_ROOT ?? process.env.ELCQA_ROOT ?? process.cwd());
+function ragHeaders(config, includeJson = false) {
+  const headers = new Headers;
+  if (includeJson)
+    headers.set("content-type", "application/json");
+  headers.set("x-crabrag-internal-token", config.internalToken);
+  headers.set("x-crabrag-subject", config.subject);
+  headers.set("x-crabrag-roles", config.roles);
+  headers.set("x-crabrag-groups", config.groups);
+  headers.set("x-crabrag-permission-revision", config.permissionRevision);
+  headers.set("x-crabrag-admin", String(config.localAdmin));
+  return headers;
+}
+
+// server/bun_api/app-config.ts
+import { join } from "path";
 var DEFAULT_SYSTEM_NAME = "CrabRAG";
-var LEGACY_DEFAULT_SYSTEM_NAMES = /* @__PURE__ */ new Set(["QueryBaseLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2", "QueryBasePortableLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2", "CrabRAG \u901A\u7528\u57FA\u7840\u67E5\u8BE2"]);
 var DEFAULT_KNOWLEDGE_BASE_NAME = "\u901A\u7528\u57FA\u7840\u67E5\u8BE2\u77E5\u8BC6\u5E93";
 var DEFAULT_UI_THEME = "red_white";
 var DEFAULT_UI_LANGUAGE = "en";
-async function readAppConfig() {
-  const settingsPath = join(PROJECT_ROOT, "data", "app_settings.json");
+var LEGACY_DEFAULT_SYSTEM_NAMES = new Set([
+  "QueryBaseLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2",
+  "QueryBasePortableLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2",
+  "CrabRAG \u901A\u7528\u57FA\u7840\u67E5\u8BE2"
+]);
+async function readAppConfig(projectRoot) {
   try {
-    const payload = JSON.parse(await Bun.file(settingsPath).text());
+    const payload = JSON.parse(await Bun.file(join(projectRoot, "data", "app_settings.json")).text());
     return {
       system_name: normalizeSystemName(payload.system_name || DEFAULT_SYSTEM_NAME),
       knowledge_base_name: payload.knowledge_base_name || DEFAULT_KNOWLEDGE_BASE_NAME,
@@ -1586,18 +1619,15 @@ async function readAppConfig() {
       common_questions: Array.isArray(payload.common_questions) ? payload.common_questions.slice(0, 10) : []
     };
   } catch {
-    return readLegacyConfig();
+    return readLegacyConfig(projectRoot);
   }
 }
-async function readLegacyConfig() {
-  const configPath = join(PROJECT_ROOT, "Config.md");
+async function readLegacyConfig(projectRoot) {
   try {
-    const text = await Bun.file(configPath).text();
-    const systemName = parseSystemName(text);
-    const knowledgeBaseName = parseKnowledgeBaseName(text);
+    const text = await Bun.file(join(projectRoot, "Config.md")).text();
     return {
-    system_name: normalizeSystemName(systemName || DEFAULT_SYSTEM_NAME),
-      knowledge_base_name: knowledgeBaseName || DEFAULT_KNOWLEDGE_BASE_NAME,
+      system_name: normalizeSystemName(parseScalar(text, "system_name") || DEFAULT_SYSTEM_NAME),
+      knowledge_base_name: parseScalar(text, "knowledge_base_name") || DEFAULT_KNOWLEDGE_BASE_NAME,
       ui_theme: DEFAULT_UI_THEME,
       ui_language: DEFAULT_UI_LANGUAGE,
       common_questions: parseCommonQuestions(text)
@@ -1612,12 +1642,6 @@ async function readLegacyConfig() {
     };
   }
 }
-function parseSystemName(text) {
-  return parseScalar(text, "system_name");
-}
-function parseKnowledgeBaseName(text) {
-  return parseScalar(text, "knowledge_base_name");
-}
 function normalizeSystemName(value) {
   return LEGACY_DEFAULT_SYSTEM_NAMES.has(value) ? DEFAULT_SYSTEM_NAME : value;
 }
@@ -1630,9 +1654,8 @@ function normalizeLanguage(value) {
 function parseScalar(text, key) {
   for (const line of text.split(/\r?\n/)) {
     const match2 = line.match(new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*$`));
-    if (match2?.[1]) {
+    if (match2?.[1])
       return match2[1].replace(/^["']|["']$/g, "").trim();
-    }
   }
   return "";
 }
@@ -1657,288 +1680,185 @@ function parseCommonQuestions(text) {
   return questions.slice(0, 10);
 }
 
-// server/bun_api/routes/categories.ts
-var categoriesRoute = new Hono2;
-categoriesRoute.get("/categories", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/categories`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/chat.ts
-var chatRoute = new Hono2;
-chatRoute.post("/chat", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/chat`, {
-    method: "POST",
-    headers: ragHeaders(true),
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/config.ts
-var configRoute = new Hono2;
-configRoute.get("/config", async (c) => {
-  return c.json(await readAppConfig());
-});
-configRoute.put("/config", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/config`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/evaluations.ts
-var evaluationsRoute = new Hono2;
-evaluationsRoute.post("/evaluations/run", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/run`, { method: "POST", headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-evaluationsRoute.get("/evaluations", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-evaluationsRoute.get("/evaluations/active", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/active`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-evaluationsRoute.get("/evaluations/:runId/progress", async (c) => {
-  const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-evaluationsRoute.get("/evaluations/:runId", async (c) => {
-  const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/graph.ts
-var graphRoute = new Hono2;
-graphRoute.get("/graph", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/graph`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-graphRoute.post("/graph/subgraph", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/graph/subgraph`, {
-    method: "POST",
-    headers: ragHeaders(true),
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-graphRoute.get("/graph/schema", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/graph/schema`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-graphRoute.get("/graph/schema/suggestion", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/graph/schema/suggestion`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-graphRoute.put("/graph/schema", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/graph/schema`, {
-    method: "PUT",
-    headers: ragHeaders(true),
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/health.ts
-var healthRoute = new Hono2;
-healthRoute.get("/health", async (c) => {
-  try {
-    const res = await fetch(`${RAG_BASE_URL}/api/health`);
-    const rag = await res.json();
-    return c.json({ ...rag, web: "ok" });
-  } catch {
-    return c.json({ web: "ok", rag_service: "unavailable", docs_dir_exists: false, chroma: "unknown", llm_api: "unknown" });
-  }
-});
-
-// server/bun_api/routes/index-governance.ts
-var indexRoute = new Hono2;
-indexRoute.get("/index/status", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/index/status`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-indexRoute.post("/index/rollback", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/index/rollback`, { method: "POST", headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/ingest.ts
-var ingestRoute = new Hono2;
-ingestRoute.post("/ingest", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest`, { method: "POST", headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-ingestRoute.post("/ingest/run", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/run`, { method: "POST", headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-ingestRoute.post("/ingest/full", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/full`, { method: "POST", headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-ingestRoute.get("/ingest/active", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/active`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-ingestRoute.get("/ingest/:runId/progress", async (c) => {
-  const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-ingestRoute.get("/ingest/:runId", async (c) => {
-  const runId = c.req.param("runId");
-  const res = await fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/logs.ts
-var logsRoute = new Hono2;
-logsRoute.get("/logs", async (c) => {
-  const url = new URL(c.req.url);
-  const qs = url.search;
-  const res = await fetch(`${RAG_BASE_URL}/api/logs${qs}`, { headers: ragHeaders() });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/routes/settings.ts
-var settingsRoute = new Hono2;
-settingsRoute.get("/settings", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/settings`);
-  return c.json(await res.json(), res.status);
-});
-settingsRoute.put("/settings", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/settings`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-settingsRoute.get("/app-settings", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/app-settings`);
-  return c.json(await res.json(), res.status);
-});
-settingsRoute.put("/app-settings", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/app-settings`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-settingsRoute.put("/app-settings/sidebar-image", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/app-settings/sidebar-image`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-settingsRoute.get("/app-assets/sidebar-image", async () => {
-  const res = await fetch(`${RAG_BASE_URL}/api/app-assets/sidebar-image`);
-  return new Response(res.body, {
-    status: res.status,
-    headers: { "content-type": res.headers.get("content-type") ?? "application/octet-stream" }
-  });
-});
-settingsRoute.get("/model-settings", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/model-settings`);
-  return c.json(await res.json(), res.status);
-});
-settingsRoute.put("/model-settings", async (c) => {
-  const body = await c.req.json();
-  const res = await fetch(`${RAG_BASE_URL}/api/model-settings`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  return c.json(await res.json(), res.status);
-});
-
-// server/bun_api/index.ts
-var app = new Hono2;
-var port = Number(process.env.PORT ?? 3003);
-var webDistRelativePath = "apps/web/dist";
-var webDistDir = join2(PROJECT_ROOT, ...webDistRelativePath.split("/"));
-app.route("/api", chatRoute);
-app.route("/api", ingestRoute);
-app.route("/api", healthRoute);
-app.route("/api", logsRoute);
-app.route("/api", settingsRoute);
-app.route("/api", evaluationsRoute);
-app.route("/api", configRoute);
-app.route("/api", categoriesRoute);
-app.route("/api", graphRoute);
-app.route("/api", indexRoute);
-app.get("*", async (c) => {
-  const requestUrl = new URL(c.req.url);
-  if (requestUrl.pathname.startsWith("/api/")) {
-    return c.json({ error: "API route not found or gateway route not loaded" }, 404);
-  }
-  return serveReactDist(requestUrl.pathname);
-});
-Bun.serve({ fetch: app.fetch, hostname: "127.0.0.1", port, idleTimeout: 255 });
-console.log(`Bun API Gateway: http://127.0.0.1:${port}`);
-function escapeHtml(value) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+// server/bun_api/proxy.ts
+async function proxyJson(fetcher, input, init) {
+  const response = await fetcher(input, init);
+  return Response.json(await response.json(), { status: response.status });
 }
-async function serveReactDist(pathname) {
-  const requestedPath = decodeURIComponent(pathname);
-  const relativePath = requestedPath === "/" ? "index.html" : requestedPath.slice(1).replaceAll("/", "\\");
-  if (relativePath.includes("..")) {
-    return new Response("Not found", { status: 404 });
+async function proxyBinary(fetcher, input, init) {
+  const response = await fetcher(input, init);
+  return new Response(response.body, {
+    status: response.status,
+    headers: {
+      "content-type": response.headers.get("content-type") ?? "application/octet-stream"
+    }
+  });
+}
+
+// server/bun_api/routes.ts
+function createApiRoutes({ config, fetcher, projectRoot }) {
+  const app = new Hono2;
+  const api = (path) => `${config.ragBaseUrl}/api${path}`;
+  const governed = (json = false) => ragHeaders(config, json);
+  const body = async (request) => JSON.stringify(await request.json());
+  app.post("/chat", async (c) => proxyJson(fetcher, api("/chat"), {
+    method: "POST",
+    headers: governed(true),
+    body: await body(c.req)
+  }));
+  app.get("/categories", async () => proxyJson(fetcher, api("/categories"), { headers: governed() }));
+  app.get("/config", async (c) => c.json(await readAppConfig(projectRoot)));
+  app.put("/config", async (c) => proxyJson(fetcher, api("/config"), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: await body(c.req)
+  }));
+  app.post("/evaluations/run", async () => proxyJson(fetcher, api("/evaluations/run"), { method: "POST", headers: governed() }));
+  app.get("/evaluations", async () => proxyJson(fetcher, api("/evaluations"), { headers: governed() }));
+  app.get("/evaluations/active", async () => proxyJson(fetcher, api("/evaluations/active"), { headers: governed() }));
+  app.get("/evaluations/:runId/progress", async (c) => proxyJson(fetcher, api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }));
+  app.get("/evaluations/:runId", async (c) => proxyJson(fetcher, api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }));
+  app.get("/graph", async () => proxyJson(fetcher, api("/graph"), { headers: governed() }));
+  app.post("/graph/subgraph", async (c) => proxyJson(fetcher, api("/graph/subgraph"), {
+    method: "POST",
+    headers: governed(true),
+    body: await body(c.req)
+  }));
+  app.get("/graph/schema", async () => proxyJson(fetcher, api("/graph/schema"), { headers: governed() }));
+  app.get("/graph/schema/suggestion", async () => proxyJson(fetcher, api("/graph/schema/suggestion"), { headers: governed() }));
+  app.put("/graph/schema", async (c) => proxyJson(fetcher, api("/graph/schema"), {
+    method: "PUT",
+    headers: governed(true),
+    body: await body(c.req)
+  }));
+  app.get("/health", async (c) => {
+    try {
+      const response = await fetcher(api("/health"));
+      return c.json({ ...await response.json(), web: "ok" });
+    } catch {
+      return c.json({ web: "ok", rag_service: "unavailable", docs_dir_exists: false, chroma: "unknown", llm_api: "unknown" });
+    }
+  });
+  app.get("/index/status", async () => proxyJson(fetcher, api("/index/status"), { headers: governed() }));
+  app.post("/index/rollback", async () => proxyJson(fetcher, api("/index/rollback"), { method: "POST", headers: governed() }));
+  app.post("/ingest", async () => proxyJson(fetcher, api("/ingest"), { method: "POST", headers: governed() }));
+  app.post("/ingest/run", async () => proxyJson(fetcher, api("/ingest/run"), { method: "POST", headers: governed() }));
+  app.post("/ingest/full", async () => proxyJson(fetcher, api("/ingest/full"), { method: "POST", headers: governed() }));
+  app.get("/ingest/active", async () => proxyJson(fetcher, api("/ingest/active"), { headers: governed() }));
+  app.get("/ingest/:runId/progress", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }));
+  app.get("/ingest/:runId", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }));
+  app.get("/logs", async (c) => proxyJson(fetcher, `${api("/logs")}${new URL(c.req.url).search}`, { headers: governed() }));
+  app.get("/settings", async () => proxyJson(fetcher, api("/settings")));
+  app.put("/settings", async (c) => proxyJson(fetcher, api("/settings"), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: await body(c.req)
+  }));
+  app.get("/app-settings", async () => proxyJson(fetcher, api("/app-settings")));
+  app.put("/app-settings", async (c) => proxyJson(fetcher, api("/app-settings"), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: await body(c.req)
+  }));
+  app.put("/app-settings/sidebar-image", async (c) => proxyJson(fetcher, api("/app-settings/sidebar-image"), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: await body(c.req)
+  }));
+  app.get("/app-assets/sidebar-image", async () => proxyBinary(fetcher, api("/app-assets/sidebar-image")));
+  app.get("/model-settings", async () => proxyJson(fetcher, api("/model-settings")));
+  app.put("/model-settings", async (c) => proxyJson(fetcher, api("/model-settings"), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: await body(c.req)
+  }));
+  return app;
+}
+
+// server/bun_api/static.ts
+import { extname, join as join2, resolve as resolve2, sep } from "path";
+function resolveStaticPath(pathname, webDistDir) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
   }
-  let filePath = join2(webDistDir, relativePath);
+  if (decoded.includes("\x00") || decoded.includes("\\"))
+    return null;
+  const segments = decoded.split("/").filter(Boolean);
+  if (segments.some((segment) => segment === "." || segment === ".."))
+    return null;
+  const root = resolve2(webDistDir);
+  const candidate = resolve2(root, ...segments);
+  return candidate === root || candidate.startsWith(`${root}${sep}`) ? candidate : null;
+}
+async function serveReactDist(pathname, webDistDir, projectRoot) {
+  const requestedPath = resolveStaticPath(pathname === "/" ? "/index.html" : pathname, webDistDir);
+  if (!requestedPath)
+    return new Response("Not found", { status: 404 });
+  let filePath = requestedPath;
   let file = Bun.file(filePath);
-  if (!await file.exists() && !hasFileExtension(relativePath)) {
+  if (!await file.exists() && !extname(filePath)) {
     filePath = join2(webDistDir, "index.html");
     file = Bun.file(filePath);
   }
-  if (await file.exists()) {
+  if (await file.exists())
     return new Response(file, { headers: { "content-type": contentType(filePath) } });
-  }
-  if (await Bun.file(join2(webDistDir, "index.html")).exists()) {
+  if (await Bun.file(join2(webDistDir, "index.html")).exists())
     return new Response("Not found", { status: 404 });
-  }
-  const { system_name, ui_language } = await readAppConfig();
-  const langAttr = ui_language === "zh" ? "zh-CN" : "en";
-  const missingBuildMessage = ui_language === "zh" ? "\u672A\u627E\u5230\u524D\u7AEF\u6784\u5EFA\u4EA7\u7269\uFF0C\u8BF7\u5148\u8FD0\u884C bun run build\uFF0C\u7136\u540E\u5237\u65B0\u672C\u9875\u3002" : "Frontend build output was not found. Run bun run build, then refresh this page.";
-  return new Response(`<!doctype html><html lang="${langAttr}"><head><meta charset="utf-8"><title>${escapeHtml(system_name)}</title></head><body><h1>${escapeHtml(system_name)}</h1><p>${escapeHtml(missingBuildMessage)}</p></body></html>`, { status: 503, headers: { "content-type": "text/html; charset=utf-8" } });
+  const { system_name, ui_language } = await readAppConfig(projectRoot);
+  const lang = ui_language === "zh" ? "zh-CN" : "en";
+  const message = ui_language === "zh" ? "\u672A\u627E\u5230\u524D\u7AEF\u6784\u5EFA\u4EA7\u7269\uFF0C\u8BF7\u5148\u8FD0\u884C bun run build\uFF0C\u7136\u540E\u5237\u65B0\u672C\u9875\u3002" : "Frontend build output was not found. Run bun run build, then refresh this page.";
+  return new Response(`<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><title>${escapeHtml(system_name)}</title></head><body><h1>${escapeHtml(system_name)}</h1><p>${escapeHtml(message)}</p></body></html>`, { status: 503, headers: { "content-type": "text/html; charset=utf-8" } });
 }
-function hasFileExtension(value) {
-  return /\.[a-z0-9]+$/i.test(value);
+function escapeHtml(value) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 function contentType(filePath) {
-  if (filePath.endsWith(".html"))
-    return "text/html; charset=utf-8";
-  if (filePath.endsWith(".js"))
-    return "text/javascript; charset=utf-8";
-  if (filePath.endsWith(".css"))
-    return "text/css; charset=utf-8";
-  if (filePath.endsWith(".json"))
-    return "application/json; charset=utf-8";
-  if (filePath.endsWith(".svg"))
-    return "image/svg+xml";
-  if (filePath.endsWith(".png"))
-    return "image/png";
-  if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg"))
-    return "image/jpeg";
-  if (filePath.endsWith(".gif"))
-    return "image/gif";
-  if (filePath.endsWith(".ico"))
-    return "image/x-icon";
-  return "application/octet-stream";
+  const extension = extname(filePath).toLowerCase();
+  return {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".ico": "image/x-icon"
+  }[extension] ?? "application/octet-stream";
 }
+
+// server/bun_api/index.ts
+function createApp(options = {}) {
+  const environment = readGatewayEnvironment();
+  const config = options.config ?? environment;
+  const projectRoot = options.projectRoot ?? environment.projectRoot;
+  const webDistDir = options.webDistDir ?? join3(projectRoot, "apps", "web", "dist");
+  const fetcher = options.fetch ?? fetch;
+  const app = new Hono2;
+  app.route("/api", createApiRoutes({ config, fetcher, projectRoot }));
+  app.all("/api", (c) => c.json({ error: "API route not found or gateway route not loaded" }, 404));
+  app.all("/api/*", (c) => c.json({ error: "API route not found or gateway route not loaded" }, 404));
+  app.get("*", async (c) => {
+    const pathname = new URL(c.req.url).pathname;
+    if (pathname === "/api" || pathname.startsWith("/api/")) {
+      return c.json({ error: "API route not found or gateway route not loaded" }, 404);
+    }
+    return serveReactDist(pathname, webDistDir, projectRoot);
+  });
+  return app;
+}
+if (import.meta.main) {
+  const environment = readGatewayEnvironment();
+  const port = Number(process.env.PORT ?? 3003);
+  const app = createApp({ config: environment, projectRoot: environment.projectRoot });
+  Bun.serve({ fetch: app.fetch, hostname: "127.0.0.1", port, idleTimeout: 255 });
+  console.log(`Bun API Gateway: http://127.0.0.1:${port}`);
+}
+export {
+  resolveStaticPath,
+  createApp
+};

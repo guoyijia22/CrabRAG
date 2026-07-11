@@ -5,38 +5,53 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_gateway_injects_configured_identity_and_proxies_index_governance_routes():
-    gateway = (ROOT / "server" / "gateway.js").read_text(encoding="utf-8")
+    config = (ROOT / "server" / "bun_api" / "config.ts").read_text(encoding="utf-8")
+    routes = (ROOT / "server" / "bun_api" / "routes.ts").read_text(encoding="utf-8")
+    entrypoint = (ROOT / "server" / "bun_api" / "index.ts").read_text(encoding="utf-8")
 
-    assert "CRABRAG_INTERNAL_TOKEN" in gateway
-    assert '"x-crabrag-subject"' in gateway
-    assert 'indexRoute.get("/index/status"' in gateway
-    assert 'indexRoute.post("/index/rollback"' in gateway
-    assert 'app.route("/api", indexRoute)' in gateway
+    assert "CRABRAG_INTERNAL_TOKEN" in config
+    assert 'headers.set("x-crabrag-subject", config.subject)' in config
+    assert 'app.get("/index/status"' in routes
+    assert 'app.post("/index/rollback"' in routes
+    assert 'app.route("/api", createApiRoutes(' in entrypoint
 
 
 def test_gateway_forwards_trusted_identity_to_all_admin_routes():
-    gateway = (ROOT / "server" / "gateway.js").read_text(encoding="utf-8")
+    routes = (ROOT / "server" / "bun_api" / "routes.ts").read_text(encoding="utf-8")
 
     expected_calls = [
-        'fetch(`${RAG_BASE_URL}/api/evaluations/run`, { method: "POST", headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/evaluations`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/evaluations/active`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/evaluations/${encodeURIComponent(runId)}`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/ingest`, { method: "POST", headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/ingest/run`, { method: "POST", headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/ingest/full`, { method: "POST", headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/ingest/active`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}/progress`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/ingest/${encodeURIComponent(runId)}`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/logs${qs}`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/graph/schema`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/graph/schema/suggestion`, { headers: ragHeaders() })',
-        'fetch(`${RAG_BASE_URL}/api/graph/schema`, {\n    method: "PUT",\n    headers: ragHeaders(true),',
+        'api("/evaluations/run"), { method: "POST", headers: governed() }',
+        'api("/evaluations"), { headers: governed() }',
+        'api("/evaluations/active"), { headers: governed() }',
+        'api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }',
+        'api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }',
+        'api("/ingest"), { method: "POST", headers: governed() }',
+        'api("/ingest/run"), { method: "POST", headers: governed() }',
+        'api("/ingest/full"), { method: "POST", headers: governed() }',
+        'api("/ingest/active"), { headers: governed() }',
+        'api(`/ingest/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }',
+        'api(`/ingest/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }',
+        '`${api("/logs")}${new URL(c.req.url).search}`, { headers: governed() }',
+        'api("/graph/schema"), { headers: governed() }',
+        'api("/graph/schema/suggestion"), { headers: governed() }',
+        'api("/graph/schema"), {\n    method: "PUT", headers: governed(true),',
     ]
 
     for expected in expected_calls:
-        assert expected in gateway
+        assert expected in routes
+
+
+def test_gateway_bundle_has_maintainable_rebuildable_source_contract():
+    package = (ROOT / "package.json").read_text(encoding="utf-8")
+    entrypoint = (ROOT / "server" / "bun_api" / "index.ts").read_text(encoding="utf-8")
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+
+    for source_name in ("app-config.ts", "config.ts", "index.ts", "proxy.ts", "routes.ts", "static.ts"):
+        assert (ROOT / "server" / "bun_api" / source_name).is_file()
+    assert '"hono": "4.12.29"' in package
+    assert '"build:gateway": "bun build server/bun_api/index.ts --target bun --outfile server/gateway.js"' in package
+    assert "if (import.meta.main)" in entrypoint
+    assert "server/gateway.js text eol=lf" in attributes
 
 
 def test_start_scripts_generate_shared_internal_token_when_missing():

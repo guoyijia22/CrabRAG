@@ -1,1 +1,2 @@
 *.sh text eol=lf
+server/gateway.js text eol=lf
