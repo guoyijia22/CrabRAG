@@ -276,11 +276,11 @@ def test_service_running_detects_custom_ports_from_project_run_state(tmp_path: P
     root = tmp_path / "CrabRAG"
     (root / "data").mkdir(parents=True)
     (root / "data" / "run.json").write_text(
-        json.dumps({"project_root": str(root.resolve()), "web_port": 3103, "api_port": 8101, "pids": [123, 456]}),
+        json.dumps({"project_root": str(root.resolve()), "web_port": 3103, "api_port": 8101, "processes": [{"pid": 123, "role": "api", "start_identity": "start-1"}]}),
         encoding="utf-8",
     )
     monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda port: port == 8101)
-    monkeypatch.setattr(crabrag_admin, "_process_is_alive", lambda _pid: False)
+    monkeypatch.setattr(crabrag_admin, "_run_state_process_matches", lambda _item, _root, _ports: True)
     monkeypatch.setattr(crabrag_admin, "_project_process_detected", lambda _root: False)
 
     assert crabrag_admin.service_is_running(root) is True
@@ -294,6 +294,7 @@ def test_run_scripts_publish_project_scoped_runtime_state():
     assert "data/run.json" in shell and "project_root" in shell
     assert 'RUN_STATE_WRITTEN="0"' in shell
     assert 'if [[ "$RUN_STATE_WRITTEN" == "1" ]]' in shell
+    assert "start_identity" in powershell and "start_identity" in shell
 
 
 def test_restore_rejects_symlink_or_reparse_point_in_target_ancestors(tmp_path: Path, monkeypatch):
@@ -379,19 +380,64 @@ def test_backup_marks_plaintext_secrets_warns_and_applies_owner_only_permissions
     external.mkdir()
     _seed_project(root, external)
     archive = tmp_path / "backup.zip"
-    chmod_calls = []
-    real_chmod = os.chmod
+    def permissions_not_enforced(path):
+        path.touch()
+        return False
 
-    def record_chmod(path, mode):
-        chmod_calls.append((Path(path), mode))
-        return real_chmod(path, mode)
-
-    monkeypatch.setattr(crabrag_admin.os, "chmod", record_chmod)
+    monkeypatch.setattr(crabrag_admin, "_create_private_archive_file", permissions_not_enforced)
     manifest = crabrag_admin.create_backup(root, archive)
 
     assert manifest["contains_secrets"] is True
-    assert (archive, 0o600) in chmod_calls
+    assert manifest["permissions_enforced"] is False
     monkeypatch.setattr(crabrag_admin, "PROJECT_ROOT", root)
     assert crabrag_admin.main(["backup", "--output", str(tmp_path / "cli-backup.zip")]) == 0
     output = json.loads(capsys.readouterr().out)
     assert "plaintext" in output["warning"].lower()
+    assert "not enforced" in output["warning"].lower()
+
+
+def test_stale_run_state_with_reused_unrelated_pid_does_not_block_restore(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "run.json").write_text(
+        json.dumps({"project_root": str(root.resolve()), "web_port": 3103, "api_port": 8101, "processes": [{"pid": 123, "role": "api", "start_identity": "old-start"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda _port: False)
+    monkeypatch.setattr(crabrag_admin, "_process_is_alive", lambda _pid: True)
+    monkeypatch.setattr(crabrag_admin, "_run_state_process_matches", lambda _item, _root, _ports: False)
+    monkeypatch.setattr(crabrag_admin, "_project_process_detected", lambda _root: False)
+
+    assert crabrag_admin.service_is_running(root) is False
+
+
+def test_backup_rejects_reparse_point_in_protected_source_ancestor(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    (root / "data" / "chroma").mkdir(parents=True)
+    (root / "data" / "chroma" / "state.db").write_bytes(b"state")
+    monkeypatch.setattr(crabrag_admin, "_path_is_link_or_reparse", lambda path: path == root / "data")
+    archive = tmp_path / "backup.zip"
+
+    with pytest.raises(crabrag_admin.BackupError, match="symlink|reparse|escape"):
+        crabrag_admin.create_backup(root, archive)
+
+    assert not archive.exists()
+
+
+@pytest.mark.parametrize("configured", [".", "data/chroma"])
+def test_backup_rejects_knowledge_base_that_contains_or_equals_protected_state(tmp_path: Path, configured: str):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    (root / "data" / "chroma").mkdir(parents=True)
+    docs_root = (root / configured).resolve()
+    (root / "data" / "app_settings.json").write_text(
+        json.dumps({"knowledge_base_dirs": [str(docs_root)]}), encoding="utf-8"
+    )
+
+    with pytest.raises(crabrag_admin.BackupError, match="overlap|protected"):
+        crabrag_admin.create_backup(root, tmp_path / "backup.zip")

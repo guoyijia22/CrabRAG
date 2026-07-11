@@ -112,6 +112,10 @@ try {
         web_port = $WebPort
         api_port = $ApiPort
         pids = @($apiProcess.Id, $webProcess.Id)
+        processes = @(
+            @{ pid = $apiProcess.Id; role = "api"; start_identity = $apiProcess.StartTime.ToUniversalTime().Ticks.ToString() },
+            @{ pid = $webProcess.Id; role = "web"; start_identity = $webProcess.StartTime.ToUniversalTime().Ticks.ToString() }
+        )
         started_at = [DateTime]::UtcNow.ToString("o")
     } | ConvertTo-Json
     $runStateTemp = "$RunStatePath.tmp"

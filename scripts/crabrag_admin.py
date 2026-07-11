@@ -252,26 +252,59 @@ def _path_is_within(path: Path, directory: Path) -> bool:
     return True
 
 
+def _assert_backup_source_safe(root: Path, path: Path) -> Path:
+    root_absolute = root.absolute()
+    path_absolute = path.absolute()
+    try:
+        relative = path_absolute.relative_to(root_absolute)
+    except ValueError as exc:
+        raise BackupError(f"backup source escaped project root: {path}") from exc
+    current = root_absolute
+    if current.exists() and _path_is_link_or_reparse(current):
+        raise BackupError(f"backup source contains a symlink or reparse point: {current}")
+    for part in relative.parts:
+        current = current / part
+        if current.exists() and _path_is_link_or_reparse(current):
+            raise BackupError(f"backup source contains a symlink or reparse point: {current}")
+    resolved = path_absolute.resolve()
+    try:
+        resolved.relative_to(root_absolute.resolve())
+    except ValueError as exc:
+        raise BackupError(f"backup source escaped project root: {path}") from exc
+    return resolved
+
+
+def _validate_knowledge_base_overlap(root: Path, knowledge_base_paths: Iterable[Path]) -> None:
+    protected = [(root / relative).resolve() for relative in _RESTORE_UNITS]
+    for docs_root in knowledge_base_paths:
+        candidate = docs_root.resolve()
+        for protected_path in protected:
+            if candidate == protected_path or _path_is_within(protected_path, candidate):
+                raise BackupError(f"knowledge base path overlaps protected backup state: {candidate}")
+
+
 def _iter_backup_files(root: Path, excluded_roots: Iterable[Path] = ()) -> Iterable[tuple[str, Path]]:
     excluded = tuple(path.resolve() for path in excluded_roots)
     for relative in _BACKUP_DIRECTORIES:
         directory = root / relative
         if not directory.is_dir() or directory.is_symlink():
             continue
+        _assert_backup_source_safe(root, directory)
         for path in sorted(directory.rglob("*")):
             if path.is_file() and not path.is_symlink():
                 resolved = path.resolve()
+                if any(_path_is_within(resolved, excluded_root) for excluded_root in excluded):
+                    continue
+                resolved = _assert_backup_source_safe(root, path)
                 try:
                     resolved.relative_to(root)
                 except ValueError:
-                    continue
-                if any(_path_is_within(resolved, directory) for directory in excluded):
-                    continue
+                    raise BackupError(f"backup source escaped project root: {path}")
                 yield resolved.relative_to(root).as_posix(), resolved
     for relative in _BACKUP_FILES:
         path = root / relative
         if path.is_file() and not path.is_symlink():
-            yield relative, path.resolve()
+            yield relative, _assert_backup_source_safe(root, path)
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -313,6 +346,27 @@ def _contains_plaintext_secret(relative: str, content: bytes) -> bool:
     return False
 
 
+def _create_private_archive_file(path: Path) -> bool:
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(descriptor)
+    if os.name != "nt":
+        return (path.stat().st_mode & 0o777) == 0o600
+    username = os.getenv("USERNAME") or os.getenv("USER")
+    if not username:
+        return False
+    try:
+        result = subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{username}:(F)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def create_backup(project_root: Path, output: Path) -> dict[str, object]:
     root = project_root.resolve()
     destination = output.expanduser().resolve()
@@ -322,6 +376,7 @@ def create_backup(project_root: Path, output: Path) -> dict[str, object]:
     entries: list[tuple[str, bytes]] = []
     file_manifest: list[dict[str, object]] = []
     knowledge_base_paths = _configured_document_paths(root)
+    _validate_knowledge_base_overlap(root, knowledge_base_paths)
     contains_secrets = False
     for relative, path in _iter_backup_files(root, knowledge_base_paths):
         content = path.read_bytes()
@@ -338,6 +393,8 @@ def create_backup(project_root: Path, output: Path) -> dict[str, object]:
     }
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
     try:
+        permissions_enforced = _create_private_archive_file(temporary)
+        manifest["permissions_enforced"] = permissions_enforced
         with temporary.open("wb") as raw:
             with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
                 bundle.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -346,10 +403,6 @@ def create_backup(project_root: Path, output: Path) -> dict[str, object]:
             raw.flush()
             os.fsync(raw.fileno())
         os.replace(temporary, destination)
-        try:
-            os.chmod(destination, 0o600)
-        except OSError:
-            pass
     finally:
         try:
             temporary.unlink()
@@ -475,6 +528,69 @@ def _process_is_alive(pid: int) -> bool:
     return True
 
 
+def _process_runtime_info(pid: int) -> dict[str, object]:
+    if os.name == "nt":
+        command = (
+            f"$p=Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" -ErrorAction SilentlyContinue; "
+            f"$g=Get-Process -Id {pid} -ErrorAction SilentlyContinue; "
+            "if ($null -eq $p -or $null -eq $g) { exit 1 }; "
+            "$ports=@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
+            f"Where-Object {{ $_.OwningProcess -eq {pid} }} | ForEach-Object {{ $_.LocalPort }}); "
+            "@{command_line=$p.CommandLine; executable=$p.ExecutablePath; "
+            "start_identity=$g.StartTime.ToUniversalTime().Ticks.ToString(); ports=$ports} | ConvertTo-Json -Compress"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.returncode == 0 else {}
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+    proc = Path("/proc") / str(pid)
+    try:
+        command_line = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        executable = str((proc / "exe").resolve())
+        stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        start_identity = stat_fields[19]
+    except (OSError, IndexError):
+        return {}
+    return {"command_line": command_line, "executable": executable, "start_identity": start_identity, "ports": []}
+
+
+def _run_state_process_matches(item: object, project_root: Path, ports: list[int]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    pid = item.get("pid")
+    role = str(item.get("role") or "")
+    expected_start = str(item.get("start_identity") or "")
+    if not isinstance(pid, int) or role not in {"api", "web"} or not expected_start or not _process_is_alive(pid):
+        return False
+    info = _process_runtime_info(pid)
+    if str(info.get("start_identity") or "") != expected_start:
+        return False
+    command_line = str(info.get("command_line") or "").replace("\\", "/").lower()
+    role_marker = "uvicorn" if role == "api" else "server/gateway.js"
+    if role_marker not in command_line:
+        return False
+    executable = str(info.get("executable") or "")
+    if not executable:
+        return False
+    try:
+        Path(executable).resolve().relative_to(project_root.resolve())
+    except ValueError:
+        if str(project_root.resolve()).casefold() not in command_line.casefold():
+            return False
+    owned_ports = info.get("ports") if isinstance(info.get("ports"), list) else []
+    if owned_ports and not any(port in ports for port in owned_ports):
+        return False
+    return True
+
+
 def _project_process_detected(project_root: Path) -> bool:
     root_text = str(project_root.resolve())
     if os.name == "nt":
@@ -521,10 +637,9 @@ def service_is_running(project_root: Path) -> bool:
         state_matches = False
     if state_matches:
         ports = [state.get("web_port"), state.get("api_port")]
-        pids = state.get("pids") if isinstance(state.get("pids"), list) else []
-        if any(isinstance(port, int) and _port_is_open(port) for port in ports):
-            return True
-        if any(isinstance(pid, int) and _process_is_alive(pid) for pid in pids):
+        valid_ports = [port for port in ports if isinstance(port, int)]
+        processes = state.get("processes") if isinstance(state.get("processes"), list) else []
+        if any(_run_state_process_matches(item, root, valid_ports) for item in processes):
             return True
     return _project_process_detected(root) or any(_port_is_open(port) for port in SERVICE_PORTS)
 
@@ -649,7 +764,10 @@ def main(argv: list[str] | None = None) -> int:
             manifest = create_backup(PROJECT_ROOT, args.output)
             payload: dict[str, object] = {"status": "ok", "output": str(args.output.resolve()), "manifest": manifest}
             if manifest.get("contains_secrets"):
-                payload["warning"] = "Backup contains plaintext secrets; store it with owner-only access."
+                if manifest.get("permissions_enforced"):
+                    payload["warning"] = "Backup contains plaintext secrets; owner-only permissions were enforced, but secure storage is still required."
+                else:
+                    payload["warning"] = "Backup contains plaintext secrets and owner-only permissions were not enforced; move it to protected storage immediately."
             print(json.dumps(payload, ensure_ascii=False))
             return EXIT_OK
         result = restore_backup(PROJECT_ROOT, args.archive, assume_yes=args.assume_yes)

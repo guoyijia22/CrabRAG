@@ -108,12 +108,23 @@ import sys
 from datetime import datetime, timezone
 
 path = Path(sys.argv[1])
+
+def start_identity(pid: int) -> str:
+    fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+    return fields[19]
+
+api_pid = int(sys.argv[5])
+web_pid = int(sys.argv[6])
 payload = {
     "schema_version": 1,
     "project_root": str(Path(sys.argv[2]).resolve()),
     "web_port": int(sys.argv[3]),
     "api_port": int(sys.argv[4]),
-    "pids": [int(sys.argv[5]), int(sys.argv[6])],
+    "pids": [api_pid, web_pid],
+    "processes": [
+        {"pid": api_pid, "role": "api", "start_identity": start_identity(api_pid)},
+        {"pid": web_pid, "role": "web", "start_identity": start_identity(web_pid)},
+    ],
     "started_at": datetime.now(timezone.utc).isoformat(),
 }
 temporary = path.with_suffix(".json.tmp")
