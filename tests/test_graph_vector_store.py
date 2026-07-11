@@ -6,6 +6,7 @@ from typing import Any
 class FakeCollection:
     def __init__(self, name: str) -> None:
         self.name = name
+        self.metadata: dict[str, Any] = {}
         self.added: list[dict[str, Any]] = []
         self.upserted: list[dict[str, Any]] = []
         self.deleted: list[list[str]] = []
@@ -35,6 +36,10 @@ class FakeCollection:
 
     def count(self) -> int:
         return sum(len(batch["ids"]) for batch in self.added + self.upserted)
+
+    def modify(self, *, metadata=None, name=None) -> None:
+        if metadata is not None:
+            self.metadata = dict(metadata)
 
     def query(self, *, query_embeddings, n_results, include):
         documents = [document for batch in self.added for document in batch["documents"]]

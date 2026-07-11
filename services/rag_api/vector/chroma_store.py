@@ -45,7 +45,7 @@ def add_chunks(
     progress_callback: ProgressCallback | None = None,
     collection_metadata: dict[str, Any] | None = None,
 ) -> int:
-    collection = reset_collection(collection_metadata)
+    collection = reset_collection(collection_metadata) if collection_metadata else reset_collection()
     if not chunks:
         collection.modify(
             metadata={

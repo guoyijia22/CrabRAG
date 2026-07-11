@@ -159,6 +159,9 @@ def test_add_chunks_reports_embedding_batch_progress(monkeypatch):
                 raise ValueError(f"Batch size of {len(kwargs['ids'])} is greater than max batch size of 2")
             added_batches.append(kwargs)
 
+        def modify(self, *, metadata=None, name=None):
+            pass
+
     monkeypatch.setattr(chroma_store, "EMBEDDING_BATCH_SIZE", 2)
     monkeypatch.setattr(chroma_store, "embed_texts", lambda texts: [[0.1, 0.2, 0.3] for _ in texts])
     monkeypatch.setattr(chroma_store, "reset_collection", lambda: FakeCollection())
