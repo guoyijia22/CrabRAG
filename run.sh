@@ -14,6 +14,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PYTHON="$ROOT/.venv/bin/python"
 PORTABLE_PYTHON="$ROOT/runtime/python/python"
 PORTABLE_BUN="$ROOT/runtime/bun/bun"
+RUN_STATE="$ROOT/data/run.json"
+RUN_STATE_WRITTEN="0"
 API_PID=""
 WEB_PID=""
 
@@ -33,6 +35,9 @@ cleanup() {
       kill "$pid" >/dev/null 2>&1 || true
     fi
   done
+  if [[ "$RUN_STATE_WRITTEN" == "1" ]]; then
+    rm -f "$RUN_STATE"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -93,6 +98,29 @@ sleep 2
 log "Starting web gateway on http://127.0.0.1:$WEB_PORT"
 "$BUN_BIN" server/gateway.js &
 WEB_PID="$!"
+
+mkdir -p "$(dirname "$RUN_STATE")"
+"$PYTHON_BIN" - "$RUN_STATE" "$ROOT" "$WEB_PORT" "$API_PORT" "$API_PID" "$WEB_PID" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+from datetime import datetime, timezone
+
+path = Path(sys.argv[1])
+payload = {
+    "schema_version": 1,
+    "project_root": str(Path(sys.argv[2]).resolve()),
+    "web_port": int(sys.argv[3]),
+    "api_port": int(sys.argv[4]),
+    "pids": [int(sys.argv[5]), int(sys.argv[6])],
+    "started_at": datetime.now(timezone.utc).isoformat(),
+}
+temporary = path.with_suffix(".json.tmp")
+temporary.write_text(json.dumps(payload), encoding="utf-8")
+os.replace(temporary, path)
+PY
+RUN_STATE_WRITTEN="1"
 
 log "CrabRAG is starting. Open http://127.0.0.1:$WEB_PORT/. Press Ctrl+C to stop."
 while kill -0 "$API_PID" >/dev/null 2>&1 && kill -0 "$WEB_PID" >/dev/null 2>&1; do

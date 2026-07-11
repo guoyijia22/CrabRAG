@@ -28,6 +28,7 @@ $Root = $PSScriptRoot
 $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
 $PortablePython = Join-Path $Root "runtime\python\python.exe"
 $PortableBun = Join-Path $Root "runtime\bun\bun.exe"
+$RunStatePath = Join-Path $Root "data\run.json"
 
 function Resolve-Python {
     if (Test-Path $VenvPython) {
@@ -105,6 +106,19 @@ try {
     Write-Step "Starting web gateway on http://127.0.0.1:$WebPort"
     $webProcess = Start-Process -FilePath $Bun -ArgumentList @("server/gateway.js") -WorkingDirectory $Root -PassThru -NoNewWindow
 
+    $runState = @{
+        schema_version = 1
+        project_root = $Root
+        web_port = $WebPort
+        api_port = $ApiPort
+        pids = @($apiProcess.Id, $webProcess.Id)
+        started_at = [DateTime]::UtcNow.ToString("o")
+    } | ConvertTo-Json
+    $runStateTemp = "$RunStatePath.tmp"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $RunStatePath) -Force | Out-Null
+    [System.IO.File]::WriteAllText($runStateTemp, $runState, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $runStateTemp -Destination $RunStatePath -Force
+
     Write-Step "CrabRAG is starting. Open http://127.0.0.1:$WebPort/. Press Ctrl+C to stop."
     while ($true) {
         if ($apiProcess.HasExited) {
@@ -122,4 +136,5 @@ try {
             Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
         }
     }
+    Remove-Item -LiteralPath $RunStatePath -Force -ErrorAction SilentlyContinue
 }

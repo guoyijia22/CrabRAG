@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Callable, Iterable
+import unicodedata
 import uuid
 import zipfile
 
@@ -38,6 +39,8 @@ _BACKUP_FILES = (
     "data/rag_settings.json",
 )
 _RESTORE_UNITS = (*_BACKUP_DIRECTORIES, *_BACKUP_FILES)
+_WINDOWS_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{value}" for value in range(1, 10)), *(f"LPT{value}" for value in range(1, 10))}
+_SECRET_FIELD_MARKERS = ("api_key", "apikey", "access_token", "client_secret", "password")
 
 
 class BackupError(RuntimeError):
@@ -241,7 +244,16 @@ def _version_for_root(root: Path) -> str:
         return SOFTWARE_VERSION
 
 
-def _iter_backup_files(root: Path) -> Iterable[tuple[str, Path]]:
+def _path_is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+    except ValueError:
+        return False
+    return True
+
+
+def _iter_backup_files(root: Path, excluded_roots: Iterable[Path] = ()) -> Iterable[tuple[str, Path]]:
+    excluded = tuple(path.resolve() for path in excluded_roots)
     for relative in _BACKUP_DIRECTORIES:
         directory = root / relative
         if not directory.is_dir() or directory.is_symlink():
@@ -252,6 +264,8 @@ def _iter_backup_files(root: Path) -> Iterable[tuple[str, Path]]:
                 try:
                     resolved.relative_to(root)
                 except ValueError:
+                    continue
+                if any(_path_is_within(resolved, directory) for directory in excluded):
                     continue
                 yield resolved.relative_to(root).as_posix(), resolved
     for relative in _BACKUP_FILES:
@@ -264,6 +278,41 @@ def _sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _contains_plaintext_secret(relative: str, content: bytes) -> bool:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    if Path(relative).name == ".env":
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            normalized = key.strip().lower()
+            if any(marker in normalized for marker in ("key", "token", "secret", "password")) and value.strip().strip('"\''):
+                return True
+    if Path(relative).suffix.lower() == ".json":
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = None
+
+        def has_secret(value: object) -> bool:
+            if isinstance(value, dict):
+                return any(
+                    (any(marker in str(key).lower() for marker in _SECRET_FIELD_MARKERS) and bool(item)) or has_secret(item)
+                    for key, item in value.items()
+                )
+            if isinstance(value, list):
+                return any(has_secret(item) for item in value)
+            return False
+
+        if has_secret(payload):
+            return True
+    return False
+
+
 def create_backup(project_root: Path, output: Path) -> dict[str, object]:
     root = project_root.resolve()
     destination = output.expanduser().resolve()
@@ -272,8 +321,11 @@ def create_backup(project_root: Path, output: Path) -> dict[str, object]:
         raise BackupError("backup output must be a ZIP file")
     entries: list[tuple[str, bytes]] = []
     file_manifest: list[dict[str, object]] = []
-    for relative, path in _iter_backup_files(root):
+    knowledge_base_paths = _configured_document_paths(root)
+    contains_secrets = False
+    for relative, path in _iter_backup_files(root, knowledge_base_paths):
         content = path.read_bytes()
+        contains_secrets = contains_secrets or _contains_plaintext_secret(relative, content)
         entries.append((relative, content))
         file_manifest.append({"path": relative, "sha256": _sha256_bytes(content), "size": len(content)})
     manifest: dict[str, object] = {
@@ -281,7 +333,8 @@ def create_backup(project_root: Path, output: Path) -> dict[str, object]:
         "software_version": _version_for_root(root),
         "created_at": _now(),
         "files": file_manifest,
-        "external_knowledge_base_paths": [str(path) for path in _configured_document_paths(root)],
+        "external_knowledge_base_paths": [str(path) for path in knowledge_base_paths],
+        "contains_secrets": contains_secrets,
     }
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -293,6 +346,10 @@ def create_backup(project_root: Path, output: Path) -> dict[str, object]:
             raw.flush()
             os.fsync(raw.fileno())
         os.replace(temporary, destination)
+        try:
+            os.chmod(destination, 0o600)
+        except OSError:
+            pass
     finally:
         try:
             temporary.unlink()
@@ -308,9 +365,23 @@ def _safe_payload_path(value: object) -> str:
     if pure.is_absolute() or ".." in pure.parts or ":" in pure.parts[0]:
         raise BackupError("unsafe backup path")
     normalized = pure.as_posix()
+    _portable_path_key(normalized)
     if not _is_allowed_restore_path(normalized):
         raise BackupError(f"backup path is not allowed: {normalized}")
     return normalized
+
+
+def _portable_path_key(value: str) -> str:
+    normalized_parts: list[str] = []
+    for part in PurePosixPath(value).parts:
+        if not part or part != part.rstrip(" .") or ":" in part:
+            raise BackupError("backup path is not portable on Windows")
+        normalized = unicodedata.normalize("NFC", part)
+        stem = normalized.split(".", 1)[0].upper()
+        if stem in _WINDOWS_RESERVED_NAMES:
+            raise BackupError("backup path uses a Windows reserved name")
+        normalized_parts.append(normalized.casefold())
+    return "/".join(normalized_parts)
 
 
 def _is_allowed_restore_path(path: str) -> bool:
@@ -356,6 +427,7 @@ def _validate_archive(archive: Path, extract_root: Path) -> dict[str, object]:
         if not isinstance(files, list):
             raise BackupError("backup file manifest is invalid")
         declared: set[str] = set()
+        portable_paths: set[str] = set()
         for item in files:
             if not isinstance(item, dict):
                 raise BackupError("backup file manifest is invalid")
@@ -363,6 +435,10 @@ def _validate_archive(archive: Path, extract_root: Path) -> dict[str, object]:
             if relative in declared:
                 raise BackupError("backup file path is duplicated")
             declared.add(relative)
+            portable_key = _portable_path_key(relative)
+            if portable_key in portable_paths:
+                raise BackupError("backup contains ambiguous portable paths")
+            portable_paths.add(portable_key)
             member = f"payload/{relative}"
             if names.count(member) != 1:
                 raise BackupError(f"backup payload is missing or duplicated: {relative}")
@@ -372,15 +448,85 @@ def _validate_archive(archive: Path, extract_root: Path) -> dict[str, object]:
             target = extract_root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
-        actual_payload = {name.removeprefix("payload/") for name in names if name.startswith("payload/") and not name.endswith("/")}
+        actual_files = {name for name in names if not name.endswith("/")}
+        expected_files = {"manifest.json", *(f"payload/{relative}" for relative in declared)}
+        if actual_files != expected_files:
+            raise BackupError("backup contains undeclared archive members")
+        for name in (entry for entry in names if entry.endswith("/")):
+            if not name.startswith("payload/"):
+                raise BackupError("backup contains undeclared archive members")
+            directory = name.removeprefix("payload/").rstrip("/")
+            _safe_payload_path(directory)
+            if not any(relative.startswith(f"{directory}/") for relative in declared):
+                raise BackupError("backup contains undeclared archive members")
+        actual_payload = {name.removeprefix("payload/") for name in actual_files if name.startswith("payload/")}
         if actual_payload != declared:
             raise BackupError("backup contains undeclared payload files")
         return manifest
 
 
+def _process_is_alive(pid: int) -> bool:
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _project_process_detected(project_root: Path) -> bool:
+    root_text = str(project_root.resolve())
+    if os.name == "nt":
+        escaped = root_text.replace("'", "''")
+        command = (
+            "$root='" + escaped + "'; "
+            "$found=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.CommandLine -and $_.CommandLine.Contains($root) -and "
+            "($_.CommandLine -match 'uvicorn|server[\\\\/]gateway\\.js|run\\.ps1') }; "
+            "if ($found) { exit 0 } else { exit 1 }"
+        )
+        try:
+            return subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            ).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return False
+    for item in proc.iterdir():
+        if not item.name.isdigit():
+            continue
+        try:
+            command_line = (item / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            continue
+        if root_text in command_line and any(marker in command_line for marker in ("uvicorn", "server/gateway.js", "run.sh")):
+            return True
+    return False
+
+
 def service_is_running(project_root: Path) -> bool:
-    del project_root
-    return any(_port_is_open(port) for port in SERVICE_PORTS)
+    root = project_root.resolve()
+    state = _read_json(root / "data" / "run.json")
+    state_root = str(state.get("project_root") or "")
+    try:
+        state_matches = bool(state_root and Path(state_root).resolve() == root)
+    except OSError:
+        state_matches = False
+    if state_matches:
+        ports = [state.get("web_port"), state.get("api_port")]
+        pids = state.get("pids") if isinstance(state.get("pids"), list) else []
+        if any(isinstance(port, int) and _port_is_open(port) for port in ports):
+            return True
+        if any(isinstance(pid, int) and _process_is_alive(pid) for pid in pids):
+            return True
+    return _project_process_detected(root) or any(_port_is_open(port) for port in SERVICE_PORTS)
 
 
 def _remove_path(path: Path) -> None:
@@ -393,6 +539,25 @@ def _remove_path(path: Path) -> None:
             pass
 
 
+def _path_is_link_or_reparse(path: Path) -> bool:
+    try:
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return path.is_symlink() or bool(attributes & 0x400)
+
+
+def _validate_restore_boundaries(root: Path) -> None:
+    for relative in _RESTORE_UNITS:
+        current = root
+        for part in Path(relative).parts:
+            if current.exists() and _path_is_link_or_reparse(current):
+                raise BackupError(f"restore target boundary contains a symlink or reparse point: {current}")
+            current = current / part
+        if current.exists() and _path_is_link_or_reparse(current):
+            raise BackupError(f"restore target boundary contains a symlink or reparse point: {current}")
+
+
 def restore_backup(
     project_root: Path,
     archive: Path,
@@ -400,31 +565,32 @@ def restore_backup(
     assume_yes: bool = False,
     confirm: Callable[[str], str] = input,
 ) -> dict[str, object]:
-    root = project_root.resolve()
+    root = project_root.expanduser().absolute()
     archive_path = archive.expanduser().resolve()
     if service_is_running(root):
         raise BackupError("CrabRAG service is running; stop it before restore")
-    root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".crabrag-restore-", dir=root.parent) as temporary_dir:
         extracted = Path(temporary_dir) / "validated"
         extracted.mkdir()
         manifest = _validate_archive(archive_path, extracted)
+        _validate_restore_boundaries(root)
         if not assume_yes and confirm("Restore will replace CrabRAG configuration and index state. Continue? [y/N] ").strip().lower() not in {"y", "yes"}:
             raise BackupError("restore cancelled")
 
+        root.mkdir(parents=True, exist_ok=True)
         transaction = Path(temporary_dir) / "transaction"
         transaction.mkdir()
-        prepared: list[tuple[Path, Path, Path]] = []
+        prepared: list[tuple[Path, Path | None, Path]] = []
         for index, relative in enumerate(_RESTORE_UNITS):
             source = extracted / relative
-            if not source.exists():
-                continue
             target = root / relative
-            stage = transaction / f"stage-{index}"
+            if not source.exists() and not target.exists():
+                continue
+            stage: Path | None = transaction / f"stage-{index}" if source.exists() else None
             rollback = transaction / f"rollback-{index}"
-            if source.is_dir():
+            if source.is_dir() and stage is not None:
                 shutil.copytree(source, stage)
-            else:
+            elif source.exists() and stage is not None:
                 stage.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, stage)
             prepared.append((target, stage, rollback))
@@ -438,7 +604,8 @@ def restore_backup(
                     os.replace(target, rollback)
                     moved_existing = True
                 try:
-                    os.replace(stage, target)
+                    if stage is not None:
+                        os.replace(stage, target)
                 except Exception:
                     if moved_existing and rollback.exists():
                         os.replace(rollback, target)
@@ -480,7 +647,10 @@ def main(argv: list[str] | None = None) -> int:
             return exit_code
         if args.command == "backup":
             manifest = create_backup(PROJECT_ROOT, args.output)
-            print(json.dumps({"status": "ok", "output": str(args.output.resolve()), "manifest": manifest}, ensure_ascii=False))
+            payload: dict[str, object] = {"status": "ok", "output": str(args.output.resolve()), "manifest": manifest}
+            if manifest.get("contains_secrets"):
+                payload["warning"] = "Backup contains plaintext secrets; store it with owner-only access."
+            print(json.dumps(payload, ensure_ascii=False))
             return EXIT_OK
         result = restore_backup(PROJECT_ROOT, args.archive, assume_yes=args.assume_yes)
         print(json.dumps({"status": "ok", **result}, ensure_ascii=False))

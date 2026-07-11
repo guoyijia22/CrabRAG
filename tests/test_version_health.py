@@ -32,3 +32,22 @@ def test_health_keeps_legacy_fields_and_adds_build_and_model_capabilities(monkey
     assert set(payload["model_capabilities"]) == {"remote", "local"}
     assert payload["model_capabilities"]["remote"]["configured"] is False
     assert payload["model_capabilities"]["local"]["available"] is False
+
+
+def test_onnxruntime_health_probe_is_cached(monkeypatch):
+    from services.rag_api import version
+
+    calls = []
+    monkeypatch.setattr(version, "_ONNX_PROBE_CACHE", None)
+    monkeypatch.setattr(version.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        version.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or type("Result", (), {"returncode": 0})(),
+    )
+
+    first = version.onnxruntime_capability()
+    second = version.onnxruntime_capability()
+
+    assert first == second == {"available": True, "error_type": None}
+    assert len(calls) == 1

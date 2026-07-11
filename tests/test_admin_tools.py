@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import zipfile
 
@@ -208,3 +209,189 @@ def test_restore_recovers_current_unit_if_atomic_replace_is_interrupted(tmp_path
         crabrag_admin.restore_backup(target, archive, assume_yes=True)
 
     assert old_env.read_text(encoding="utf-8") == "ORIGINAL=1\n"
+
+
+def test_restore_clears_whitelisted_units_absent_from_backup(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    source = tmp_path / "source"
+    (source / "config").mkdir(parents=True)
+    (source / "config" / ".env").write_text("FROM_BACKUP=1\n", encoding="utf-8")
+    archive = tmp_path / "backup.zip"
+    crabrag_admin.create_backup(source, archive)
+    target = tmp_path / "target"
+    (target / "data" / "chroma").mkdir(parents=True)
+    (target / "data" / "chroma" / "old.db").write_bytes(b"stale")
+    (target / "data" / "index").mkdir(parents=True)
+    (target / "data" / "index" / "active.json").write_text("{}", encoding="utf-8")
+    (target / "data" / "model_api_settings.json").write_text('{"api_key":"stale"}', encoding="utf-8")
+    monkeypatch.setattr(crabrag_admin, "service_is_running", lambda _root: False)
+
+    crabrag_admin.restore_backup(target, archive, assume_yes=True)
+
+    assert (target / "config" / ".env").read_text(encoding="utf-8") == "FROM_BACKUP=1\n"
+    assert not (target / "data" / "chroma").exists()
+    assert not (target / "data" / "index").exists()
+    assert not (target / "data" / "model_api_settings.json").exists()
+
+
+def test_restore_invalid_archive_does_not_create_target_root(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    archive = tmp_path / "invalid.zip"
+    archive.write_bytes(b"not a zip")
+    target = tmp_path / "missing-target"
+    monkeypatch.setattr(crabrag_admin, "service_is_running", lambda _root: False)
+
+    with pytest.raises(crabrag_admin.BackupError, match="invalid"):
+        crabrag_admin.restore_backup(target, archive, assume_yes=True)
+
+    assert not target.exists()
+
+
+def test_restore_rejects_undeclared_top_level_member(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    source = tmp_path / "source"
+    source.mkdir()
+    archive = tmp_path / "backup.zip"
+    crabrag_admin.create_backup(source, archive)
+    malicious = tmp_path / "malicious.zip"
+    with zipfile.ZipFile(archive) as original, zipfile.ZipFile(malicious, "w") as output:
+        for info in original.infolist():
+            output.writestr(info, original.read(info.filename))
+        output.writestr("surprise.txt", b"undeclared")
+    target = tmp_path / "missing-target"
+    monkeypatch.setattr(crabrag_admin, "service_is_running", lambda _root: False)
+
+    with pytest.raises(crabrag_admin.BackupError, match="undeclared|member"):
+        crabrag_admin.restore_backup(target, malicious, assume_yes=True)
+
+    assert not target.exists()
+
+
+def test_service_running_detects_custom_ports_from_project_run_state(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "run.json").write_text(
+        json.dumps({"project_root": str(root.resolve()), "web_port": 3103, "api_port": 8101, "pids": [123, 456]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda port: port == 8101)
+    monkeypatch.setattr(crabrag_admin, "_process_is_alive", lambda _pid: False)
+    monkeypatch.setattr(crabrag_admin, "_project_process_detected", lambda _root: False)
+
+    assert crabrag_admin.service_is_running(root) is True
+
+
+def test_run_scripts_publish_project_scoped_runtime_state():
+    powershell = Path("run.ps1").read_text(encoding="utf-8")
+    shell = Path("run.sh").read_text(encoding="utf-8")
+
+    assert "data\\run.json" in powershell and "project_root" in powershell
+    assert "data/run.json" in shell and "project_root" in shell
+    assert 'RUN_STATE_WRITTEN="0"' in shell
+    assert 'if [[ "$RUN_STATE_WRITTEN" == "1" ]]' in shell
+
+
+def test_restore_rejects_symlink_or_reparse_point_in_target_ancestors(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    source = tmp_path / "source"
+    (source / "data" / "chroma").mkdir(parents=True)
+    (source / "data" / "chroma" / "db").write_bytes(b"db")
+    archive = tmp_path / "backup.zip"
+    crabrag_admin.create_backup(source, archive)
+    target = tmp_path / "target"
+    (target / "data").mkdir(parents=True)
+    monkeypatch.setattr(crabrag_admin, "service_is_running", lambda _root: False)
+    monkeypatch.setattr(crabrag_admin, "_path_is_link_or_reparse", lambda path: path == target / "data")
+
+    with pytest.raises(crabrag_admin.BackupError, match="symlink|reparse|boundary"):
+        crabrag_admin.restore_backup(target, archive, assume_yes=True)
+
+    assert not (target / "data" / "chroma").exists()
+
+
+def test_backup_excludes_configured_knowledge_base_nested_inside_state_whitelist(tmp_path: Path):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    internal_docs = root / "data" / "chroma" / "knowledge-docs"
+    internal_docs.mkdir(parents=True)
+    (internal_docs / "private.txt").write_text("private body", encoding="utf-8")
+    (root / "data" / "chroma" / "chroma.sqlite3").write_bytes(b"index")
+    (root / "data" / "app_settings.json").write_text(
+        json.dumps({"knowledge_base_dirs": [str(internal_docs)]}), encoding="utf-8"
+    )
+    archive = tmp_path / "backup.zip"
+
+    manifest = crabrag_admin.create_backup(root, archive)
+
+    assert manifest["external_knowledge_base_paths"] == [str(internal_docs.resolve())]
+    with zipfile.ZipFile(archive) as bundle:
+        names = set(bundle.namelist())
+    assert "payload/data/chroma/chroma.sqlite3" in names
+    assert "payload/data/chroma/knowledge-docs/private.txt" not in names
+
+
+@pytest.mark.parametrize("first,second", [
+    ("data/chroma/Foo.db", "data/chroma/foo.db"),
+    ("data/chroma/name", "data/chroma/name."),
+    ("data/chroma/file", "data/chroma/file "),
+    ("data/chroma/con.txt", "data/chroma/other.txt"),
+    ("data/chroma/file:stream", "data/chroma/other.txt"),
+])
+def test_restore_rejects_windows_ambiguous_or_reserved_paths(tmp_path: Path, monkeypatch, first: str, second: str):
+    from scripts import crabrag_admin
+
+    archive = tmp_path / "ambiguous.zip"
+    files = [(first, b"one"), (second, b"two")]
+    manifest = {
+        "format_version": 1,
+        "software_version": crabrag_admin.SOFTWARE_VERSION,
+        "files": [
+            {"path": path, "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
+            for path, content in files
+        ],
+        "external_knowledge_base_paths": [],
+    }
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("manifest.json", json.dumps(manifest))
+        for path, content in files:
+            bundle.writestr(f"payload/{path}", content)
+    target = tmp_path / "target"
+    monkeypatch.setattr(crabrag_admin, "service_is_running", lambda _root: False)
+
+    with pytest.raises(crabrag_admin.BackupError, match="ambiguous|reserved|unsafe|portable"):
+        crabrag_admin.restore_backup(target, archive, assume_yes=True)
+
+    assert not target.exists()
+
+
+def test_backup_marks_plaintext_secrets_warns_and_applies_owner_only_permissions(tmp_path: Path, monkeypatch, capsys):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    external = tmp_path / "docs"
+    external.mkdir()
+    _seed_project(root, external)
+    archive = tmp_path / "backup.zip"
+    chmod_calls = []
+    real_chmod = os.chmod
+
+    def record_chmod(path, mode):
+        chmod_calls.append((Path(path), mode))
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(crabrag_admin.os, "chmod", record_chmod)
+    manifest = crabrag_admin.create_backup(root, archive)
+
+    assert manifest["contains_secrets"] is True
+    assert (archive, 0o600) in chmod_calls
+    monkeypatch.setattr(crabrag_admin, "PROJECT_ROOT", root)
+    assert crabrag_admin.main(["backup", "--output", str(tmp_path / "cli-backup.zip")]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert "plaintext" in output["warning"].lower()
