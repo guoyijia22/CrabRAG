@@ -82,6 +82,9 @@ $env:CRABRAG_ENV_FILE = Join-Path $Root "config\.env"
 $env:ELCQA_ENV_FILE = $env:CRABRAG_ENV_FILE
 $env:RAG_BASE_URL = "http://127.0.0.1:$ApiPort"
 $env:PORT = "$WebPort"
+if (-not $env:CRABRAG_INTERNAL_TOKEN) {
+    $env:CRABRAG_INTERNAL_TOKEN = [guid]::NewGuid().ToString("N")
+}
 $env:PYTHONUTF8 = "1"
 $env:PYTHONNOUSERSITE = "1"
 if ($env:PYTHONPATH) {

@@ -1551,6 +1551,23 @@ import { join as join2 } from "path";
 // server/bun_api/config.ts
 import { join, resolve } from "path";
 var RAG_BASE_URL = process.env.RAG_BASE_URL ?? "http://127.0.0.1:8001";
+var CRABRAG_INTERNAL_TOKEN = process.env.CRABRAG_INTERNAL_TOKEN ?? "";
+var CRABRAG_SUBJECT = process.env.CRABRAG_SUBJECT ?? "local-user";
+var CRABRAG_ROLES = process.env.CRABRAG_ROLES ?? "";
+var CRABRAG_GROUPS = process.env.CRABRAG_GROUPS ?? "";
+var CRABRAG_PERMISSION_REVISION = process.env.CRABRAG_PERMISSION_REVISION ?? "1";
+var CRABRAG_LOCAL_ADMIN = (process.env.CRABRAG_LOCAL_ADMIN ?? "true").toLowerCase() !== "false";
+function ragHeaders(includeJson = false) {
+  return {
+    ...(includeJson ? { "content-type": "application/json" } : {}),
+    "x-crabrag-internal-token": CRABRAG_INTERNAL_TOKEN,
+    "x-crabrag-subject": CRABRAG_SUBJECT,
+    "x-crabrag-roles": CRABRAG_ROLES,
+    "x-crabrag-groups": CRABRAG_GROUPS,
+    "x-crabrag-permission-revision": CRABRAG_PERMISSION_REVISION,
+    "x-crabrag-admin": String(CRABRAG_LOCAL_ADMIN)
+  };
+}
 var PROJECT_ROOT = resolve(process.env.CRABRAG_ROOT ?? process.env.ELCQA_ROOT ?? process.cwd());
 var DEFAULT_SYSTEM_NAME = "CrabRAG \u901A\u7528\u57FA\u7840\u67E5\u8BE2";
 var LEGACY_DEFAULT_SYSTEM_NAMES = /* @__PURE__ */ new Set(["QueryBaseLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2", "QueryBasePortableLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2"]);
@@ -1643,7 +1660,7 @@ function parseCommonQuestions(text) {
 // server/bun_api/routes/categories.ts
 var categoriesRoute = new Hono2;
 categoriesRoute.get("/categories", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/categories`);
+  const res = await fetch(`${RAG_BASE_URL}/api/categories`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 
@@ -1653,7 +1670,7 @@ chatRoute.post("/chat", async (c) => {
   const body = await c.req.json();
   const res = await fetch(`${RAG_BASE_URL}/api/chat`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: ragHeaders(true),
     body: JSON.stringify(body)
   });
   return c.json(await res.json(), res.status);
@@ -1702,14 +1719,14 @@ evaluationsRoute.get("/evaluations/:runId", async (c) => {
 // server/bun_api/routes/graph.ts
 var graphRoute = new Hono2;
 graphRoute.get("/graph", async (c) => {
-  const res = await fetch(`${RAG_BASE_URL}/api/graph`);
+  const res = await fetch(`${RAG_BASE_URL}/api/graph`, { headers: ragHeaders() });
   return c.json(await res.json(), res.status);
 });
 graphRoute.post("/graph/subgraph", async (c) => {
   const body = await c.req.json();
   const res = await fetch(`${RAG_BASE_URL}/api/graph/subgraph`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: ragHeaders(true),
     body: JSON.stringify(body)
   });
   return c.json(await res.json(), res.status);
@@ -1742,6 +1759,17 @@ healthRoute.get("/health", async (c) => {
   } catch {
     return c.json({ web: "ok", rag_service: "unavailable", docs_dir_exists: false, chroma: "unknown", llm_api: "unknown" });
   }
+});
+
+// server/bun_api/routes/index-governance.ts
+var indexRoute = new Hono2;
+indexRoute.get("/index/status", async (c) => {
+  const res = await fetch(`${RAG_BASE_URL}/api/index/status`, { headers: ragHeaders() });
+  return c.json(await res.json(), res.status);
+});
+indexRoute.post("/index/rollback", async (c) => {
+  const res = await fetch(`${RAG_BASE_URL}/api/index/rollback`, { method: "POST", headers: ragHeaders() });
+  return c.json(await res.json(), res.status);
 });
 
 // server/bun_api/routes/ingest.ts
@@ -1854,6 +1882,7 @@ app.route("/api", evaluationsRoute);
 app.route("/api", configRoute);
 app.route("/api", categoriesRoute);
 app.route("/api", graphRoute);
+app.route("/api", indexRoute);
 app.get("*", async (c) => {
   const requestUrl = new URL(c.req.url);
   if (requestUrl.pathname.startsWith("/api/")) {

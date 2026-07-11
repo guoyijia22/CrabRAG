@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 import uuid
 
@@ -25,6 +26,9 @@ from services.rag_api.model_api_settings import public_model_api_settings, updat
 from services.rag_api.rag_settings import RagSettings, load_rag_settings, save_rag_settings
 from services.rag_api.schemas import ChatRequest, ChatResponse, ConfigUpdateRequest, ModelApiSettingsRequest, ModelApiSettingsResponse, SettingsResponse
 from services.rag_api.vector.chroma_store import collection_status
+from services.rag_api import index_generation
+from services.rag_api.index_scheduler import INDEX_SCHEDULER
+from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
 from services.rag_api.security import (
     PermissionServiceError,
     build_retrieval_context,
@@ -32,7 +36,17 @@ from services.rag_api.security import (
     use_retrieval_context,
 )
 
-app = FastAPI(title="crabrag-api")
+
+@asynccontextmanager
+async def app_lifespan(_: FastAPI):
+    INDEX_SCHEDULER.start()
+    try:
+        yield
+    finally:
+        INDEX_SCHEDULER.stop()
+
+
+app = FastAPI(title="crabrag-api", lifespan=app_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:3003", "http://127.0.0.1:5173"],
@@ -47,7 +61,7 @@ def root() -> dict:
     return {
         "service": "crabrag-api",
         "status": "ok",
-        "endpoints": ["/api/health", "/api/chat", "/api/ingest", "/api/categories", "/api/graph", "/api/logs", "/api/settings", "/api/evaluations", "/docs"],
+        "endpoints": ["/api/health", "/api/chat", "/api/ingest", "/api/index/status", "/api/categories", "/api/graph", "/api/logs", "/api/settings", "/api/evaluations", "/docs"],
     }
 
 
@@ -171,7 +185,52 @@ def health() -> dict:
         "docs_dirs": [str(path) for path in settings.docs_dirs],
         "chroma": chroma_state,
         "llm_api": "local_qwen_onnx" if settings.use_local_models else ("configured" if settings.api_key else "missing_api_key"),
+        "active_generation": index_generation.active_generation_id(),
+        "index_scheduler": INDEX_SCHEDULER.status(),
     }
+
+
+@app.get("/api/index/status")
+def index_status(http_request: Request) -> dict:
+    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    if not principal.can_manage_index:
+        raise HTTPException(status_code=403, detail="index management permission required")
+    state = index_generation.load_index_state()
+    active = _generation_manifest_or_none(state.get("active_generation"))
+    previous = _generation_manifest_or_none(state.get("previous_generation"))
+    return {
+        **state,
+        "active": active,
+        "previous": previous,
+        "can_rollback": bool(previous and previous.get("permission_schema_version") == 1),
+        "cache": RETRIEVAL_CACHE.stats(),
+        "scheduler": INDEX_SCHEDULER.status(),
+    }
+
+
+@app.post("/api/index/rollback")
+def rollback_index(http_request: Request) -> dict:
+    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    if not principal.can_manage_index:
+        raise HTTPException(status_code=403, detail="index management permission required")
+    try:
+        state = index_generation.rollback_generation()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    RETRIEVAL_CACHE.clear()
+    from services.rag_api.memory import conversation_memory
+
+    conversation_memory.SESSION_MEMORY.clear()
+    return {**state, "status": "rolled_back"}
+
+
+def _generation_manifest_or_none(generation_id) -> dict | None:
+    if not generation_id:
+        return None
+    try:
+        return index_generation.load_generation_manifest(str(generation_id))
+    except ValueError:
+        return None
 
 
 @app.get("/api/config")

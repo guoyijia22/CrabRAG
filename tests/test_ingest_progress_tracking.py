@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from services.rag_api.document import ingest_storage, ingest_tasks
 from services.rag_api.vector import chroma_store
 
@@ -62,6 +64,31 @@ def test_full_rebuild_flag_is_passed_to_background_ingest(monkeypatch):
     assert calls == [True]
     assert results["incremental"] is False
     assert progress_records[-1]["status"] == "completed"
+
+
+def test_cross_process_build_lock_failure_is_reported(monkeypatch):
+    progress_records = []
+
+    @contextmanager
+    def locked():
+        raise RuntimeError("已有跨进程知识库构建正在运行")
+        yield
+
+    monkeypatch.setattr(
+        ingest_tasks.ingest_storage,
+        "read_ingest_progress",
+        lambda run_id: progress_records[-1].copy()
+        if progress_records
+        else {"run_id": run_id, "started_at": "2026-06-25 10:00:00", "total_units": ingest_tasks.TOTAL_UNITS},
+    )
+    monkeypatch.setattr(ingest_tasks.ingest_storage, "save_ingest_progress", lambda payload: progress_records.append(payload.copy()))
+    monkeypatch.setattr(ingest_tasks.index_generation, "generation_build_lock", locked, raising=False)
+    monkeypatch.setattr(ingest_tasks, "_RUNNING_RUN_ID", "run_locked")
+
+    ingest_tasks._run_background("run_locked")
+
+    assert progress_records[-1]["status"] == "failed"
+    assert "跨进程" in progress_records[-1]["error"]
 
 
 def test_active_ingest_returns_running_and_last_success(tmp_path, monkeypatch):

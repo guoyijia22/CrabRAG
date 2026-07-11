@@ -132,6 +132,38 @@ rm -rf .venv
 
 不要删除 `data/`、`docs/` 或 `config/.env`，除非你明确想清理本地运行数据、知识库文件或配置。
 
+## 生产级索引治理
+
+CrabRAG 使用双代索引原子发布。增量构建在独立 generation 中完成文本向量、分类与图谱，全部成功后才切换活动指针，并保留上一成功代用于回滚。
+
+每个知识库根目录可维护 `.crabrag-manifest.json`：
+
+```json
+{
+  "schema_version": 1,
+  "knowledge_base_id": "kb-example",
+  "documents": [
+    {
+      "document_id": "policy-a",
+      "path": "policy-v2.pdf",
+      "version": "2",
+      "status": "published",
+      "effective_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-07-11T00:00:00Z",
+      "acl": {"visibility": "restricted", "roles": ["sales"], "revision": "7"}
+    }
+  ]
+}
+```
+
+状态可选 `draft`、`published`、`retired`。未登记文件会自动按 public/published/version 1 登记，并产生高风险治理告警。所有时间必须使用带时区的 ISO-8601 格式。
+
+- `GET /api/index/status`：活动代、上一代、向量复用、缓存、调度和告警状态。
+- `POST /api/index/rollback`：管理员回滚上一兼容代。
+- `CRABRAG_INTERNAL_TOKEN`：Bun 网关与 RAG API 的内部信任令牌；标准启动脚本会在未配置时自动生成。
+
+本地身份适配器读取 `CRABRAG_SUBJECT`、`CRABRAG_ROLES`、`CRABRAG_GROUPS`、`CRABRAG_PERMISSION_REVISION` 和 `CRABRAG_LOCAL_ADMIN`。浏览器自行提交的同名权限头不会被转发。
+
 ## 常见问题
 
 - `Python 3.10+ was not found`：安装 Python 3.10 或更高版本，然后重新运行安装脚本。

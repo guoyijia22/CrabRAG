@@ -4,6 +4,7 @@ import threading
 import uuid
 from datetime import datetime
 
+from services.rag_api import index_generation
 from services.rag_api.document.ingest import ingest_knowledge_base
 from services.rag_api.document import ingest_storage
 from services.rag_api.exceptions import DOC_LOAD_ERROR_MESSAGE, LLM_ERROR_MESSAGE, DocumentLoadError, LLMServiceError
@@ -107,7 +108,8 @@ def _run_background(run_id: str, full_rebuild: bool = False) -> None:
                 "full_rebuild": full_rebuild,
             }
         )
-        result = ingest_knowledge_base(progress_callback=record, full_rebuild=full_rebuild)
+        with index_generation.generation_build_lock():
+            result = ingest_knowledge_base(progress_callback=record, full_rebuild=full_rebuild)
         result = {"run_id": run_id, **result}
         ingest_storage.save_ingest_result(result)
         record(

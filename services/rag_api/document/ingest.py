@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -72,7 +72,7 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
     if full_rebuild:
         records = {}
 
-    tombstones: list[dict[str, Any]] = []
+    tombstones = _retained_tombstones(manifest.get("tombstones", []), build_cutoff)
     for removed_doc_id in sorted(set(records) - current_doc_ids):
         previous = records.pop(removed_doc_id)
         tombstones.append(
@@ -262,6 +262,11 @@ def ingest_knowledge_base(progress_callback: ProgressCallback | None = None, ful
             },
         },
     )
+    from services.rag_api.memory import conversation_memory
+    from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
+
+    RETRIEVAL_CACHE.clear()
+    conversation_memory.SESSION_MEMORY.clear()
     return {
         "status": "success",
         "generation_id": generation_id,
@@ -368,6 +373,19 @@ def _governance_record(governance: dict[str, Any], manifest_revision: str) -> di
         "acl": governance["acl"],
         "manifest_revision": manifest_revision,
     }
+
+
+def _retained_tombstones(tombstones: list[dict[str, Any]], cutoff: datetime) -> list[dict[str, Any]]:
+    threshold = cutoff.astimezone(timezone.utc) - timedelta(days=30)
+    retained: list[dict[str, Any]] = []
+    for tombstone in tombstones:
+        try:
+            deleted_at = datetime.fromisoformat(str(tombstone.get("deleted_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if deleted_at.tzinfo is not None and deleted_at.astimezone(timezone.utc) >= threshold:
+            retained.append(tombstone)
+    return retained
 
 
 if __name__ == "__main__":

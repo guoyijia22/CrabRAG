@@ -168,6 +168,8 @@ def _capture_generation_builds(ingest, monkeypatch):
 def test_ingest_publishes_generation_only_after_all_indexes_succeed(tmp_path, monkeypatch):
     from services.rag_api import index_generation
     from services.rag_api.document import ingest
+    from services.rag_api.memory import conversation_memory
+    from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
 
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -196,6 +198,10 @@ def test_ingest_publishes_generation_only_after_all_indexes_succeed(tmp_path, mo
         },
         raising=False,
     )
+    RETRIEVAL_CACHE.clear()
+    RETRIEVAL_CACHE.set("old", {"chunks": []})
+    conversation_memory.SESSION_MEMORY.clear()
+    conversation_memory.update_memory("session", "question", "answer", "", [])
 
     result = ingest.ingest_knowledge_base()
 
@@ -203,6 +209,8 @@ def test_ingest_publishes_generation_only_after_all_indexes_succeed(tmp_path, mo
     assert index_generation.load_index_state()["active_generation"] == result["generation_id"]
     assert index_generation.generation_artifact_path(result["generation_id"], "categories.json").exists()
     assert index_generation.generation_artifact_path(result["generation_id"], "graph.json").exists()
+    assert RETRIEVAL_CACHE.stats()["size"] == 0
+    assert conversation_memory.SESSION_MEMORY == {}
 
 
 def test_ingest_failure_keeps_previous_generation_active(tmp_path, monkeypatch):
@@ -387,3 +395,18 @@ def test_multi_vector_chunks_have_content_hashes_for_their_own_text():
         expected_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         assert chunk["metadata"]["chunk_hash"] == expected_hash
         assert chunk["metadata"]["chunk_id"] == chunk["id"]
+
+
+def test_tombstones_are_retained_for_thirty_days():
+    from datetime import datetime, timezone
+
+    from services.rag_api.document.ingest import _retained_tombstones
+
+    tombstones = [
+        {"document_id": "recent", "deleted_at": "2026-07-01T00:00:00Z"},
+        {"document_id": "expired", "deleted_at": "2026-05-01T00:00:00Z"},
+    ]
+
+    retained = _retained_tombstones(tombstones, datetime(2026, 7, 11, tzinfo=timezone.utc))
+
+    assert [item["document_id"] for item in retained] == ["recent"]

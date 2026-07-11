@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ from services.rag_api.config import PROJECT_DIR
 INDEX_ROOT = PROJECT_DIR / "data" / "index"
 ACTIVE_INDEX_PATH = INDEX_ROOT / "active.json"
 GENERATIONS_DIR = INDEX_ROOT / "generations"
+INDEX_LOCK_PATH = INDEX_ROOT / "build.lock"
 
 
 def new_generation_id(now: datetime | None = None) -> str:
@@ -48,6 +51,31 @@ def load_index_state() -> dict[str, Any]:
 def active_generation_id() -> str | None:
     value = load_index_state().get("active_generation")
     return str(value) if value else None
+
+
+@contextmanager
+def generation_build_lock():
+    INDEX_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if INDEX_LOCK_PATH.exists():
+        age_seconds = datetime.now(timezone.utc).timestamp() - INDEX_LOCK_PATH.stat().st_mtime
+        if age_seconds > 24 * 60 * 60:
+            INDEX_LOCK_PATH.unlink()
+    try:
+        descriptor = os.open(INDEX_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise RuntimeError("已有跨进程知识库构建正在运行") from exc
+    try:
+        os.write(descriptor, f"pid={os.getpid()} started_at={_now()}".encode("utf-8"))
+        os.close(descriptor)
+        descriptor = -1
+        yield
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            INDEX_LOCK_PATH.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def publish_generation(generation_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -119,6 +147,41 @@ def active_artifact_path(name: str, fallback: Path) -> Path:
         return fallback
     path = generation_artifact_path(generation_id, name)
     return path if path.exists() else fallback
+
+
+def cleanup_generations(base_collection: str, chroma_client, *, now: datetime | None = None) -> dict[str, Any]:
+    state = load_index_state()
+    retained = {str(value) for value in (state.get("active_generation"), state.get("previous_generation")) if value}
+    current_time = (now or datetime.now(timezone.utc)).timestamp()
+    deleted_generations: list[str] = []
+    errors: list[dict[str, str]] = []
+    if not GENERATIONS_DIR.exists():
+        return {"deleted_generations": [], "errors": [], "cleaned_at": _now()}
+    root = GENERATIONS_DIR.resolve()
+    for directory in sorted((item for item in GENERATIONS_DIR.iterdir() if item.is_dir()), key=lambda item: item.name):
+        generation_id = directory.name
+        if generation_id in retained:
+            continue
+        resolved = directory.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            errors.append({"generation_id": generation_id, "error": "generation path escaped index root"})
+            continue
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.exists() and current_time - directory.stat().st_mtime < 24 * 60 * 60:
+            continue
+        try:
+            for kind in ("text", "graph_entity", "graph_relationship"):
+                try:
+                    chroma_client.delete_collection(generation_collection_name(base_collection, generation_id, kind))
+                except Exception:
+                    pass
+            shutil.rmtree(resolved)
+            deleted_generations.append(generation_id)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"generation_id": generation_id, "error": str(exc)})
+    return {"deleted_generations": deleted_generations, "errors": errors, "cleaned_at": _now()}
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

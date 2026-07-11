@@ -77,6 +77,7 @@ export CRABRAG_ENV_FILE="$ROOT/config/.env"
 export ELCQA_ENV_FILE="$CRABRAG_ENV_FILE"
 export RAG_BASE_URL="http://127.0.0.1:$API_PORT"
 export PORT="$WEB_PORT"
+export CRABRAG_INTERNAL_TOKEN="${CRABRAG_INTERNAL_TOKEN:-$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 export PYTHONUTF8=1
 export PYTHONNOUSERSITE=1
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"

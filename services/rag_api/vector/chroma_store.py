@@ -21,6 +21,7 @@ from services.rag_api.security import current_retrieval_context
 EMBEDDING_BATCH_SIZE = 64
 _COLLECTION_OVERRIDE: ContextVar[str | None] = ContextVar("collection_name_override", default=None)
 ProgressCallback = Callable[[dict[str, Any]], None]
+LAST_CLEANUP_STATUS: dict[str, Any] = {"deleted_generations": [], "errors": [], "cleaned_at": None}
 
 
 def get_collection():
@@ -179,6 +180,15 @@ def _embed_in_batches(documents: list[str], progress_callback: ProgressCallback 
 def collection_status() -> dict[str, Any]:
     collection = get_collection()
     return {"collection": _collection_name(), "count": collection.count(), "path": str(get_settings().chroma_dir)}
+
+
+def cleanup_obsolete_generations() -> dict[str, Any]:
+    global LAST_CLEANUP_STATUS
+    LAST_CLEANUP_STATUS = index_generation.cleanup_generations(
+        get_settings().collection_name,
+        _get_chroma_client(),
+    )
+    return LAST_CLEANUP_STATUS
 
 
 @contextmanager

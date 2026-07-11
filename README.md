@@ -132,6 +132,38 @@ rm -rf .venv
 
 Do not delete `data/`, `docs/`, or `config/.env` unless you intentionally want to remove local runtime state, knowledge-base files, or configuration.
 
+## Production index governance
+
+CrabRAG publishes text vectors, categories, and graph artifacts as one atomic index generation. A staging generation is invisible until every build step succeeds, and the previous verified generation is retained for rollback.
+
+Each knowledge-base root may contain `.crabrag-manifest.json`:
+
+```json
+{
+  "schema_version": 1,
+  "knowledge_base_id": "kb-example",
+  "documents": [
+    {
+      "document_id": "policy-a",
+      "path": "policy-v2.pdf",
+      "version": "2",
+      "status": "published",
+      "effective_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-07-11T00:00:00Z",
+      "acl": {"visibility": "restricted", "roles": ["sales"], "revision": "7"}
+    }
+  ]
+}
+```
+
+Valid states are `draft`, `published`, and `retired`. Unregistered files are automatically registered as public/published/version 1 and produce a high-risk governance warning. Timestamps must be timezone-aware ISO-8601 values.
+
+- `GET /api/index/status` reports current/previous generations, vector reuse, cache, scheduler, cleanup, and warnings.
+- `POST /api/index/rollback` rolls an administrator back to the previous compatible generation.
+- `CRABRAG_INTERNAL_TOKEN` protects identity headers between the Bun gateway and RAG API; standard run scripts generate it when absent.
+
+The local identity adapter reads `CRABRAG_SUBJECT`, `CRABRAG_ROLES`, `CRABRAG_GROUPS`, `CRABRAG_PERMISSION_REVISION`, and `CRABRAG_LOCAL_ADMIN`. Identity headers supplied directly by a browser are not forwarded.
+
 ## Troubleshooting
 
 - `Python 3.10+ was not found`: install Python 3.10 or newer and rerun the installer.

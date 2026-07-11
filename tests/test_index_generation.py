@@ -120,6 +120,41 @@ def test_graph_generation_reuses_unchanged_entity_and_relationship_embeddings(tm
     assert embedded_batches == []
 
 
+def test_cleanup_deletes_only_generations_older_than_current_and_previous(tmp_path, monkeypatch):
+    index_generation = _configure_generation_paths(tmp_path, monkeypatch)
+    for generation_id in ("gen-0", "gen-1", "gen-2"):
+        index_generation.publish_generation(generation_id, {"permission_schema_version": 1})
+    deleted_collections = []
+
+    class Client:
+        def delete_collection(self, name):
+            deleted_collections.append(name)
+
+    result = index_generation.cleanup_generations("kb", Client())
+
+    assert result["deleted_generations"] == ["gen-0"]
+    assert not (index_generation.GENERATIONS_DIR / "gen-0").exists()
+    assert (index_generation.GENERATIONS_DIR / "gen-1").exists()
+    assert (index_generation.GENERATIONS_DIR / "gen-2").exists()
+    assert deleted_collections == [
+        "kb__text__gen-0",
+        "kb__graph_entity__gen-0",
+        "kb__graph_relationship__gen-0",
+    ]
+
+
+def test_generation_build_lock_rejects_second_process(tmp_path, monkeypatch):
+    index_generation = _configure_generation_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(index_generation, "INDEX_LOCK_PATH", tmp_path / "index" / "build.lock")
+
+    with index_generation.generation_build_lock():
+        with pytest.raises(RuntimeError, match="正在运行"):
+            with index_generation.generation_build_lock():
+                pass
+
+    assert not index_generation.INDEX_LOCK_PATH.exists()
+
+
 class _FakeCollection:
     def __init__(self) -> None:
         self.records = {}
