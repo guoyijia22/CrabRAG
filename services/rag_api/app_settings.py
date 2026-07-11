@@ -22,10 +22,11 @@ MAX_SIDEBAR_IMAGE_BYTES = 10 * 1024 * 1024
 UiTheme = Literal["red_white", "blue_white", "classic_green"]
 UiLanguage = Literal["en", "zh"]
 
-DEFAULT_SYSTEM_NAME = "CrabRAG 通用基础查询"
+DEFAULT_SYSTEM_NAME = "CrabRAG"
 LEGACY_DEFAULT_SYSTEM_NAMES = {
     "QueryBaseLab 通用基础查询",
     "QueryBasePortableLab 通用基础查询",
+    "CrabRAG 通用基础查询",
 }
 DEFAULT_KNOWLEDGE_BASE_NAME = "通用基础查询知识库"
 DEFAULT_UI_THEME: UiTheme = "red_white"

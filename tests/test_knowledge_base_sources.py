@@ -328,6 +328,9 @@ def test_frontend_ingest_result_uses_rebuild_summary():
     assert "重建摘要" in bundle
     assert "graph_node_count" in bundle
     assert "graph_edge_count" in bundle
+    assert "collection:e.collection" not in bundle
+    assert "knowledge_base_name:e.knowledge_base_name" not in bundle
+    assert "knowledge_base_name_source:e.knowledge_base_name_source" not in bundle
 
 
 def test_frontend_empty_docs_directory_status_is_localized():
@@ -385,6 +388,15 @@ def test_frontend_knowledge_base_empty_dirs_prompt_is_localized():
     assert "Configure file directories in Settings > Knowledge base directories (one per line)" in bundle
     assert "(e.docs_dirs??[]).length" in bundle
     assert "D:\\\\cd\\\\docs" not in bundle
+
+
+def test_frontend_hides_knowledge_base_name_and_collection_controls():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "`知识库名称`,(0,q.jsx)(`input`" not in bundle
+    assert "`知识库名称`,`Knowledge base name`" not in bundle
+    assert "知识库集合" not in bundle
+    assert "Knowledge base collection" not in bundle
 
 
 def test_frontend_chat_category_list_starts_empty_and_refreshes_after_rebuild():
@@ -500,7 +512,6 @@ def test_frontend_english_language_covers_async_static_labels():
         "多轮聊天中先把追问改写为独立完整查询。": "Rewrite follow-up questions into standalone complete queries in multi-turn chats.",
         "RAG 评测对比": "RAG evaluation comparison",
         "每次评测都会基于当前知识库动态出题，再批量运行基线、单项优化和组合配置，比较召回、溯源、图谱路径、兜底与 Trace 差异。": "Each evaluation dynamically generates questions from the current knowledge base, then runs the baseline, single optimizations, and combined profiles to compare recall, traceability, graph paths, fallback behavior, and trace differences.",
-        "一次消耗300-500K,60分钟左右。": "Each run consumes about 300-500K tokens and takes around 60 minutes.",
         "点击“运行评测”后，系统会先根据当前知识库生成题集，再依次执行基线、单项优化和组合配置。完成后会在这里展示哪些配置更适用、哪些配置效果接近或有风险。": "After clicking Run evaluation, the system first generates a question set from the current knowledge base, then runs the baseline, single optimizations, and combined profiles. Results here show which configurations fit better, which are close, and which may be risky.",
         "基于本地规范知识库、Chroma、GraphRAG 与 LangGraph 三节点流转": "Powered by the local knowledge base, Chroma, GraphRAG, and a three-node LangGraph flow",
         "输入问题后，系统会展示分类、检索路径、规范片段和可溯源答复。": "After you ask a question, the system shows classification, retrieval paths, knowledge snippets, and traceable answers.",
@@ -542,7 +553,6 @@ def test_frontend_english_language_covers_async_static_labels():
     }
     for chinese, english in expected_translations.items():
         assert f"[`{chinese}`,`{english}`]" in bundle
-
     assert "MutationObserver" in bundle
     assert "crScheduleLanguageApply" in bundle
     assert "crLangApplying" in bundle
@@ -581,6 +591,13 @@ def test_frontend_english_language_covers_async_static_labels():
     assert "message" in bundle
     assert "source-item" in bundle
     assert "path-item" in bundle
+
+
+def test_frontend_evaluation_omits_cost_and_duration_warning():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "一次消耗300-500K,60分钟左右。" not in bundle
+    assert "Each run consumes about 300-500K tokens and takes around 60 minutes." not in bundle
 
 
 def test_frontend_evaluation_english_language_covers_dynamic_results():

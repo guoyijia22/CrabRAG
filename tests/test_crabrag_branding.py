@@ -5,6 +5,12 @@ from pathlib import Path
 import pytest
 
 
+def test_app_settings_default_system_name_is_crabrag():
+    from services.rag_api.app_settings import AppSettings
+
+    assert AppSettings().system_name == "CrabRAG"
+
+
 def test_app_settings_default_ui_language_is_english():
     from services.rag_api.app_settings import AppSettings
 
@@ -86,8 +92,31 @@ def test_old_default_system_name_migrates_to_crabrag(tmp_path: Path, monkeypatch
 
     settings = app_settings.load_app_settings()
 
-    assert settings.system_name == "CrabRAG 通用基础查询"
+    assert settings.system_name == "CrabRAG"
     assert settings.knowledge_base_name == "自定义知识库"
+
+
+def test_previous_crabrag_default_system_name_migrates_to_crabrag(tmp_path: Path, monkeypatch):
+    from services.rag_api import app_settings
+
+    settings_path = tmp_path / "data" / "app_settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        """
+        {
+          "system_name": "CrabRAG 通用基础查询",
+          "knowledge_base_name": "自定义知识库",
+          "knowledge_base_dirs": ["docs"]
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_PATH", settings_path)
+
+    settings = app_settings.load_app_settings()
+
+    assert settings.system_name == "CrabRAG"
 
 
 def test_custom_system_name_is_not_overwritten(tmp_path: Path, monkeypatch):
@@ -163,3 +192,12 @@ def test_frontend_top_nav_shows_app_version():
 
     assert "className:`app-version`,children:`Ver1.01`" in bundle_text
     assert ".app-version{color:#a8a8a8" in css_text
+
+
+def test_default_system_name_is_consistent_across_backend_gateway_and_frontend():
+    gateway_text = Path("server/gateway.js").read_text(encoding="utf-8")
+    bundle_text = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert 'var DEFAULT_SYSTEM_NAME = "CrabRAG";' in gateway_text
+    assert "var fv=`CrabRAG`,pv=`red_white`;" in bundle_text
+    assert "system_name:`CrabRAG`" in bundle_text

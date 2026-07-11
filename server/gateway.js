@@ -1569,8 +1569,8 @@ function ragHeaders(includeJson = false) {
   };
 }
 var PROJECT_ROOT = resolve(process.env.CRABRAG_ROOT ?? process.env.ELCQA_ROOT ?? process.cwd());
-var DEFAULT_SYSTEM_NAME = "CrabRAG \u901A\u7528\u57FA\u7840\u67E5\u8BE2";
-var LEGACY_DEFAULT_SYSTEM_NAMES = /* @__PURE__ */ new Set(["QueryBaseLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2", "QueryBasePortableLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2"]);
+var DEFAULT_SYSTEM_NAME = "CrabRAG";
+var LEGACY_DEFAULT_SYSTEM_NAMES = /* @__PURE__ */ new Set(["QueryBaseLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2", "QueryBasePortableLab \u901A\u7528\u57FA\u7840\u67E5\u8BE2", "CrabRAG \u901A\u7528\u57FA\u7840\u67E5\u8BE2"]);
 var DEFAULT_KNOWLEDGE_BASE_NAME = "\u901A\u7528\u57FA\u7840\u67E5\u8BE2\u77E5\u8BC6\u5E93";
 var DEFAULT_UI_THEME = "red_white";
 var DEFAULT_UI_LANGUAGE = "en";

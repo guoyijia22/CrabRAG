@@ -29,6 +29,16 @@ def test_app_settings_default_sidebar_image_url_is_blank():
     assert AppSettings().sidebar_image_url == ""
 
 
+def test_frontend_uses_crab_as_default_and_persisted_image_as_override():
+    bundle = Path("apps/web/dist/assets/index-CKowSniJ.js").read_text(encoding="utf-8")
+
+    assert "function sidebarDefaultImage(){return`/picture/crab.png`}" in bundle
+    assert "1-clean.gif" not in bundle
+    assert "2-clean.gif" not in bundle
+    assert "e.sidebar_image_url&&w(`${e.sidebar_image_url}?v=${Date.now()}`)" in bundle
+    assert Path("apps/web/dist/picture/crab.png").is_file()
+
+
 def test_save_sidebar_image_writes_binary_metadata_and_updates_settings(tmp_path: Path, monkeypatch):
     from services.rag_api import app_settings
 
