@@ -95,6 +95,11 @@ export function ChatPage({ settings, onSettingsChange }: ChatPageProps) {
 
   useEffect(() => {
     let active = true;
+    const refreshCategories = () => {
+      getCategories()
+        .then((payload) => { if (active) setCategories(payload); })
+        .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
+    };
     Promise.all([getHealth(), getCategories()])
       .then(([healthPayload, categoryPayload]) => {
         if (!active) return;
@@ -104,7 +109,8 @@ export function ChatPage({ settings, onSettingsChange }: ChatPageProps) {
       .catch((reason: unknown) => {
         if (active) setError(reason instanceof Error ? reason.message : String(reason));
       });
-    return () => { active = false; };
+    window.addEventListener("crabrag:knowledge-base-rebuilt", refreshCategories);
+    return () => { active = false; window.removeEventListener("crabrag:knowledge-base-rebuilt", refreshCategories); };
   }, []);
 
   async function submit() {
@@ -182,7 +188,7 @@ export function ChatPage({ settings, onSettingsChange }: ChatPageProps) {
         <div className="composer">
           <label htmlFor="chat-question">{text.input}</label>
           <textarea id="chat-question" rows={4} value={question} placeholder={text.placeholder} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => {
-            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();
+            if (event.key === "Enter" && !event.shiftKey && !event.altKey) { event.preventDefault(); void submit(); }
           }} />
           <button className="primary-button" type="button" disabled={loading} onClick={submit}>{loading ? text.loading : text.send}</button>
         </div>

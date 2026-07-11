@@ -122,7 +122,59 @@ textarea { resize: vertical; line-height: 1.5; }
 .model-status-list { display: grid; gap: 8px; margin-top: 12px; }
 .model-status-list details { padding: 9px; border: 1px solid var(--border); border-radius: 8px; }
 .model-status-list code { overflow-wrap: anywhere; }
-.placeholder-page { min-height: 360px; display: grid; place-content: center; text-align: center; }
+.model-download-detail { display: grid; gap: 7px; padding: 10px 0; }
+.model-download-detail > span { color: var(--muted); font-size: .78rem; font-weight: 700; }
+.model-download-detail a { width: fit-content; color: var(--accent); font-weight: 700; }
+.dashboard-grid { display: grid; gap: 14px; margin: 14px 0; }
+.dashboard-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dashboard-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dashboard-panel, .detail-panel { margin-top: 14px; padding: 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.dashboard-panel h2, .detail-panel h2 { margin: 0 0 12px; font-size: 1.05rem; }
+.dashboard-panel h3, .detail-panel h3 { margin: 14px 0 8px; font-size: .92rem; }
+.dashboard-panel pre, .mini-panel pre, .case-content pre { overflow: auto; max-height: 230px; padding: 10px; border-radius: 8px; background: var(--surface); font-size: .76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.section-heading h2, .section-heading h3 { margin: 0; }
+.section-heading button, .danger-button { padding: 8px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.danger-button { border-color: #bc4b4b; color: #8b1717; }
+.large-value { display: block; margin: 18px 0; color: var(--accent); font-size: 1.7rem; }
+.empty-state { color: var(--muted); }
+.empty-state.large { min-height: 260px; display: grid; place-content: center; border: 1px dashed var(--border); border-radius: 12px; font-size: 1rem; }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 9px; margin: 13px 0; }
+.metric-grid > div { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.metric-grid span { color: var(--muted); font-size: .78rem; }
+.metric-grid strong { font-size: 1.1rem; overflow-wrap: anywhere; }
+.mini-panel { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.mini-panel h3 { margin: 0; }
+.warning-list { padding: 10px 10px 10px 30px; border-radius: 8px; background: #fff9e8; color: #725415; }
+.property-list { display: grid; gap: 7px; }
+.property-list > div { display: grid; grid-template-columns: minmax(100px, .45fr) 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.property-list dt { color: var(--muted); }
+.property-list dd { margin: 0; overflow-wrap: anywhere; }
+.tag-row { display: flex; flex-wrap: wrap; gap: 7px; }
+progress { width: 100%; height: 12px; accent-color: var(--accent); }
+
+.graph-toolbar, .filter-row { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.graph-toolbar label, .filter-row label { display: grid; gap: 6px; min-width: min(360px, 100%); font-size: .82rem; font-weight: 700; }
+.graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 14px; }
+.graph-canvas { width: 100%; min-height: 520px; border: 1px solid var(--border); border-radius: 12px; background: radial-gradient(circle, var(--accent-soft), var(--surface) 65%); }
+.graph-canvas line { stroke: color-mix(in srgb, var(--accent) 38%, var(--border)); stroke-width: 2; }
+.graph-canvas .edge-label { cursor: pointer; fill: var(--muted); font-size: 12px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; }
+.graph-node { cursor: pointer; transition: opacity .2s; }
+.graph-node circle { fill: var(--accent); stroke: var(--surface); stroke-width: 4px; filter: drop-shadow(0 4px 6px rgb(0 0 0 / 15%)); }
+.graph-node text { fill: var(--text); font-size: 13px; font-weight: 700; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; }
+
+.master-detail { display: grid; grid-template-columns: minmax(280px, .7fr) minmax(0, 1.3fr); gap: 14px; }
+.item-list, .evaluation-history { display: grid; align-content: start; gap: 8px; margin-top: 14px; }
+.item-list button, .evaluation-history button { display: grid; gap: 5px; padding: 12px; text-align: left; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.item-list button:hover, .item-list button.selected, .evaluation-history button:hover { border-color: var(--accent); }
+.item-list small, .evaluation-history small { color: var(--muted); }
+.score-chip { display: inline-flex; align-items: center; padding: 8px 12px; border-radius: 999px; background: var(--accent); color: white; font-weight: 800; }
+.evaluation-results > h2 { margin: 22px 0 5px; font-size: 1.15rem; }
+.case-list { display: grid; gap: 8px; }
+.case-list details { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.case-list summary { padding: 8px; cursor: pointer; }
+.case-list summary button { width: 100%; padding: 4px; text-align: left; border: 0; background: transparent; font-weight: 700; }
+.case-content { padding: 0 14px 14px; }
 
 @media (max-width: 1050px) {
   .topbar { align-items: flex-start; flex-direction: column; }
@@ -143,4 +195,7 @@ textarea { resize: vertical; line-height: 1.5; }
   .page-card { width: calc(100% - 20px); margin: 10px auto; padding: 14px; }
   .page-heading { flex-direction: column; }
   .field-grid, .field-grid.three, .theme-picker, .toggle-grid { grid-template-columns: 1fr; }
+  .dashboard-grid.two, .dashboard-grid.three, .graph-layout, .master-detail { grid-template-columns: 1fr; }
+  .graph-toolbar { align-items: stretch; flex-direction: column; }
+  .graph-canvas { min-height: 360px; }
 }

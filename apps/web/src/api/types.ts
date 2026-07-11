@@ -105,6 +105,124 @@ export interface HealthResponse {
   [key: string]: unknown;
 }
 
+export interface IngestProgress {
+  run_id: string;
+  status: "idle" | "queued" | "running" | "completed" | "failed";
+  percent?: number;
+  current_step?: string;
+  message?: string;
+  error?: string | null;
+  duration_label?: string;
+  [key: string]: unknown;
+}
+
+export interface IngestActiveResponse {
+  active: IngestProgress | null;
+  last_success: IngestProgress | null;
+}
+
+export interface IngestResult {
+  run_id?: string;
+  generation_id?: string;
+  document_count?: number;
+  chunk_count?: number;
+  reused_embedding_count?: number;
+  embedded_chunk_count?: number;
+  graph_node_count?: number;
+  graph_edge_count?: number;
+  embedding_dimension?: number;
+  [key: string]: unknown;
+}
+
+export interface GraphSchema {
+  status?: string;
+  entity_types?: string[];
+  node_fields?: Array<{ key?: string; label?: string; type?: string }>;
+  edge_fields?: Array<{ key?: string; label?: string; type?: string }>;
+  [key: string]: unknown;
+}
+
+export interface GenerationManifest {
+  stats?: Record<string, number>;
+  warnings?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export interface IndexStatus {
+  active_generation?: string | null;
+  previous_generation?: string | null;
+  active?: GenerationManifest | null;
+  previous?: GenerationManifest | null;
+  can_rollback?: boolean;
+  cache?: Record<string, unknown>;
+  scheduler?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  properties?: Record<string, unknown>;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  label: string;
+  properties?: Record<string, unknown>;
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  stats: Record<string, unknown>;
+  schema?: GraphSchema;
+}
+
+export interface LogItem {
+  id?: string;
+  session_id?: string;
+  time?: string;
+  created_at?: string;
+  intent?: string;
+  category?: string;
+  question?: string;
+  answer?: string;
+  retrieval_mode?: string;
+  sources?: string[];
+  entities?: string[];
+  error?: string | null;
+  references?: ChatReference[];
+  relation_paths?: RelationPath[];
+  trace?: TraceItem[];
+  [key: string]: unknown;
+}
+
+export interface EvaluationProgress {
+  run_id?: string;
+  status: "idle" | "queued" | "running" | "completed" | "failed";
+  percent?: number;
+  current_profile?: string;
+  current_question?: string;
+  message?: string;
+  error?: string | null;
+  [key: string]: unknown;
+}
+
+export interface EvaluationRunSummary {
+  run_id: string;
+  created_at?: string;
+  profile_count?: number;
+  question_count?: number;
+  summary?: Record<string, unknown>;
+}
+
+export interface EvaluationRun extends EvaluationRunSummary {
+  question_generation?: Record<string, unknown>;
+  profiles?: Array<Record<string, unknown>>;
+}
+
 export interface CategoriesResponse {
   categories?: string[];
   items?: Array<{ name?: string; [key: string]: unknown }>;

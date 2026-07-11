@@ -70,6 +70,7 @@ export function mockApi(overrides: Record<string, unknown> = {}) {
     const url = typeof input === "string" ? input : input.toString();
     const value = payloads[url];
     if (value === undefined) return new Response(JSON.stringify({ detail: "not found" }), { status: 404 });
+    if (value instanceof Response) return value.clone();
     return new Response(JSON.stringify(value), {
       status: 200,
       headers: { "content-type": "application/json" },

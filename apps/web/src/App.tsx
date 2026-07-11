@@ -3,8 +3,11 @@ import { useEffect, useState } from "react";
 import { getAppSettings, putAppSettings } from "./api/client";
 import type { AppSettings } from "./api/types";
 import { AppHeader, type PageId } from "./components/AppHeader";
-import { PlaceholderPage } from "./components/PlaceholderPage";
 import { ChatPage } from "./pages/ChatPage";
+import { EvaluationPage } from "./pages/EvaluationPage";
+import { GraphPage } from "./pages/GraphPage";
+import { KnowledgePage } from "./pages/KnowledgePage";
+import { LogsPage } from "./pages/LogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -58,14 +61,17 @@ export function App() {
     }
   }
 
-  const placeholder = page === "knowledge" || page === "graph" || page === "logs" || page === "evaluation" || page === "governance";
   return (
     <div className="app" data-theme={settings.ui_theme} data-language={settings.ui_language}>
       <AppHeader settings={settings} page={page} busy={settingsBusy} onPageChange={setPage} onSettingsChange={persistAppSettings} />
       {bootError && <div className="global-alert alert error" role="alert">{bootError}</div>}
       {page === "chat" && <ChatPage settings={settings} onSettingsChange={setSettings} />}
+      {page === "knowledge" && <KnowledgePage language={settings.ui_language} />}
+      {page === "governance" && <KnowledgePage language={settings.ui_language} governanceOnly />}
+      {page === "graph" && <GraphPage language={settings.ui_language} />}
+      {page === "logs" && <LogsPage language={settings.ui_language} />}
+      {page === "evaluation" && <EvaluationPage language={settings.ui_language} />}
       {page === "settings" && <SettingsPage language={settings.ui_language} onAppSettingsSaved={setSettings} />}
-      {placeholder && <PlaceholderPage page={page} language={settings.ui_language} />}
     </div>
   );
 }

@@ -70,6 +70,21 @@ describe("chat", () => {
     const calls = fetchMock.mock.calls.filter(([url]) => url === "/api/chat");
     expect(JSON.parse(String(calls[0][1]?.body))).toEqual({ question: "什么是规范？" });
   });
+
+  test("submits with Enter and refreshes categories after a knowledge-base rebuild", async () => {
+    const fetchMock = mockApi({
+      "/api/chat": { session_id: "session-enter", answer: "ok", references: [], relation_paths: [], trace: [] },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    const input = await screen.findByLabelText("输入问题");
+    await user.type(input, "回车提交{enter}");
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === "/api/chat")).toHaveLength(1));
+    window.dispatchEvent(new Event("crabrag:knowledge-base-rebuilt"));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === "/api/categories")).toHaveLength(2));
+  });
 });
 
 describe("settings", () => {
@@ -116,5 +131,27 @@ describe("settings", () => {
     await user.click(await screen.findByRole("button", { name: "评测对比" }));
 
     expect(within(container).queryByText(/评测.*消耗.*禁用|evaluation.*cost.*disabled/i)).toBeNull();
+  });
+
+  test("shows bilingual local model file locations and provider download links", async () => {
+    vi.stubGlobal("fetch", mockApi({
+      "/api/model-settings": {
+        ...modelSettings,
+        local_model_status: {
+          base_dir: "runtime/models",
+          missing_count: 1,
+          models: [{ key: "llm", name: "Qwen", present: false, expected_dir: "runtime/models/qwen", required_files: ["model.onnx"], missing_files: ["model.onnx"], download_urls: { zh: "https://www.modelscope.cn/qwen", en: "https://huggingface.co/qwen" } }],
+        },
+      },
+    }));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    expect(await screen.findByText("存放目录：")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "下载地址（ModelScope）" }).getAttribute("href")).toContain("modelscope.cn");
+    await user.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByText("Save to:")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Download (Hugging Face)" }).getAttribute("href")).toContain("huggingface.co");
   });
 });

@@ -168,7 +168,7 @@ function ModelConfiguration({ value, language, onChange, secrets, onSecretChange
         <TextField label={language === "zh" ? "排序 Base URL（Rerank）" : "Rerank Base URL"} value={value.rerank_base_url} onChange={(rerank_base_url) => onChange({ ...value, rerank_base_url })} />
         <TextField type="password" label={language === "zh" ? "排序 API Key（本地可留空）" : "Rerank API Key (optional for local)"} value={secrets.rerank} placeholder={configured(value.rerank_api_key_set, value.rerank_api_key_source, value.rerank_api_key_hint)} onChange={(secret) => onSecretChange("rerank", secret)} />
       </div>
-      {value.local_model_status.models.length > 0 && <div className="model-status-list">{value.local_model_status.models.map((model) => <details key={model.key}><summary>{model.name} · {model.present ? "OK" : language === "zh" ? "文件缺失" : "Missing files"}</summary><code>{model.expected_dir}</code>{model.missing_files.map((file) => <div key={file}>{file}</div>)}</details>)}</div>}
+      {value.local_model_status.models.length > 0 && <div className="model-status-list">{value.local_model_status.models.map((model) => <details key={model.key}><summary>{model.name} · {model.present ? language === "zh" ? "本地模型文件已检测到" : "Local model files detected" : language === "zh" ? "缺失本地模型文件" : "Missing local model files"}</summary><div className="model-download-detail"><span>{language === "zh" ? "存放目录：" : "Save to:"}</span><code>{model.expected_dir}</code><span>{language === "zh" ? "缺失文件：" : "Missing files:"}</span><div>{model.missing_files.join(", ") || "-"}</div><a href={language === "zh" ? model.download_urls.zh : model.download_urls.en} target="_blank" rel="noreferrer">{language === "zh" ? "下载地址（ModelScope）" : "Download (Hugging Face)"}</a></div></details>)}</div>}
     </Section>
   );
 }
@@ -183,7 +183,7 @@ function RagConfiguration({ value, language, onChange }: { value: RagSettings; l
         <Toggle label="BM25 + Vector" checked={value.hybrid_bm25_enabled} onChange={(checked) => toggle("hybrid_bm25_enabled", checked)} />
         <Toggle label={language === "zh" ? "查询扩展" : "Query expansion"} checked={value.query_expansion_enabled} onChange={(checked) => toggle("query_expansion_enabled", checked)} />
         <Toggle label={language === "zh" ? "统一重排" : "Unified rerank"} checked={value.rerank_enabled} onChange={(checked) => toggle("rerank_enabled", checked)} />
-        <Toggle label={language === "zh" ? "追问改写" : "Follow-up rewrite"} checked={value.context_rewrite_enabled} onChange={(checked) => toggle("context_rewrite_enabled", checked)} />
+        <Toggle label={language === "zh" ? "多轮追问重写" : "Multi-turn follow-up rewrite"} checked={value.context_rewrite_enabled} onChange={(checked) => toggle("context_rewrite_enabled", checked)} />
         <Toggle label={language === "zh" ? "参数调优" : "Parameter tuning"} checked={value.rag_param_tuning_enabled} onChange={(checked) => toggle("rag_param_tuning_enabled", checked)} />
       </div>
       <div className="field-grid three">
