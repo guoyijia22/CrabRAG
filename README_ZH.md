@@ -110,6 +110,20 @@ Linux：
 ./.venv/bin/python -m pip install -r requirements.txt
 ```
 
+## 开发与测试
+
+正常安装和运行环境仍使用 `requirements.txt`。开发时通过 `requirements-dev.txt` 同时安装运行依赖和已锁定版本的测试依赖：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest
+```
+
+```bash
+./.venv/bin/python -m pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest
+```
+
 重新安装 JavaScript 依赖：
 
 ```bash

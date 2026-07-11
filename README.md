@@ -110,6 +110,20 @@ Reinstall Python dependencies:
 ./.venv/bin/python -m pip install -r requirements.txt
 ```
 
+## Development and Testing
+
+Normal installation and runtime environments continue to use `requirements.txt`. For development, install the runtime and pinned test dependencies through `requirements-dev.txt`:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest
+```
+
+```bash
+./.venv/bin/python -m pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest
+```
+
 Reinstall JavaScript dependencies:
 
 ```bash

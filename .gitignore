@@ -23,7 +23,6 @@ runtime/
 node_modules/
 
 # Python caches and test output
-/tests/
 __pycache__/
 *.py[cod]
 .pytest_cache/

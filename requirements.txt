@@ -17,5 +17,3 @@ onnxruntime==1.26.0
 tokenizers==0.23.1
 openpyxl==3.1.5
 python-pptx==1.0.2
-pytest==9.0.3
-httpx==0.28.1

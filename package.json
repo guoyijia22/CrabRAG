@@ -2,6 +2,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@huggingface/transformers": "next"
+    "@huggingface/transformers": "4.0.0-next.11"
   }
 }
