@@ -2,12 +2,6 @@ from __future__ import annotations
 
 import math
 
-_HIGHER_IS_BETTER = (
-    "recall_at_5",
-    "mrr_at_10",
-    "citation_precision",
-    "citation_coverage",
-)
 _INACTIVE_STATUSES = {"deleted", "inactive", "retired", "tombstoned"}
 _EPSILON = 1e-12
 
@@ -79,6 +73,12 @@ def evaluate_quality_gate(candidate: dict, baseline: dict, *, gate_eligible: boo
         "invalid_content_leakage_zero": float(candidate.get("invalid_content_leakage_rate", 0) or 0) == 0,
         "recall_regression_within_limit": float(candidate.get("recall_at_5", 0) or 0) + _EPSILON >= baseline_recall - 0.02,
         "p95_latency_within_limit": float(candidate.get("p95_latency_ms", 0) or 0) <= baseline_latency * 1.2 + _EPSILON,
+        "citation_precision_non_regression": float(candidate.get("citation_precision", 0) or 0) + _EPSILON
+        >= float(baseline.get("citation_precision", 0) or 0),
+        "citation_coverage_non_regression": float(candidate.get("citation_coverage", 0) or 0) + _EPSILON
+        >= float(baseline.get("citation_coverage", 0) or 0),
+        "no_evidence_answer_non_regression": float(candidate.get("no_evidence_answer_rate", 0) or 0)
+        <= float(baseline.get("no_evidence_answer_rate", 0) or 0) + _EPSILON,
         "primary_quality_improved": _primary_quality_improved(candidate, baseline),
     }
     return {
@@ -182,10 +182,22 @@ def _string_values(value) -> set[str]:
 
 
 def _primary_quality_improved(candidate: dict, baseline: dict) -> bool:
-    if any(float(candidate.get(key, 0) or 0) > float(baseline.get(key, 0) or 0) + _EPSILON for key in _HIGHER_IS_BETTER):
-        return True
-    return float(candidate.get("no_evidence_answer_rate", 0) or 0) + _EPSILON < float(
+    citation_improved = any(
+        float(candidate.get(key, 0) or 0) > float(baseline.get(key, 0) or 0) + _EPSILON
+        for key in ("citation_precision", "citation_coverage")
+    ) or float(candidate.get("no_evidence_answer_rate", 0) or 0) + _EPSILON < float(
         baseline.get("no_evidence_answer_rate", 0) or 0
+    )
+    if citation_improved:
+        return True
+    citation_at_ceiling = (
+        float(baseline.get("citation_precision", 0) or 0) >= 1 - _EPSILON
+        and float(baseline.get("citation_coverage", 0) or 0) >= 1 - _EPSILON
+        and float(baseline.get("no_evidence_answer_rate", 0) or 0) <= _EPSILON
+    )
+    return citation_at_ceiling and any(
+        float(candidate.get(key, 0) or 0) > float(baseline.get(key, 0) or 0) + _EPSILON
+        for key in ("recall_at_5", "mrr_at_10")
     )
 
 

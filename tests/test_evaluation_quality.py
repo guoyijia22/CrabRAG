@@ -208,7 +208,13 @@ def _baseline_metrics() -> dict:
 
 def test_quality_gate_enforces_leakage_recall_latency_and_improvement_thresholds():
     baseline = _baseline_metrics()
-    candidate = {**baseline, "recall_at_5": 0.78, "mrr_at_10": 0.61, "p95_latency_ms": 120}
+    candidate = {
+        **baseline,
+        "recall_at_5": 0.78,
+        "mrr_at_10": 0.61,
+        "citation_precision": 0.71,
+        "p95_latency_ms": 120,
+    }
 
     passed = evaluate_quality_gate(candidate, baseline, gate_eligible=True)
 
@@ -224,6 +230,9 @@ def test_quality_gate_enforces_leakage_recall_latency_and_improvement_thresholds
             "acl_leakage_rate": 0.01,
             "invalid_content_leakage_rate": 0.01,
             "mrr_at_10": baseline["mrr_at_10"],
+            "citation_precision": 0.6,
+            "citation_coverage": 0.6,
+            "no_evidence_answer_rate": 0.2,
         },
         baseline,
         gate_eligible=True,
@@ -234,8 +243,30 @@ def test_quality_gate_enforces_leakage_recall_latency_and_improvement_thresholds
         "invalid_content_leakage_zero": False,
         "recall_regression_within_limit": False,
         "p95_latency_within_limit": False,
+        "citation_precision_non_regression": False,
+        "citation_coverage_non_regression": False,
+        "no_evidence_answer_non_regression": False,
         "primary_quality_improved": False,
     }
+
+
+def test_quality_gate_does_not_trade_away_citation_quality_for_small_mrr_gain():
+    baseline = _baseline_metrics()
+    candidate = {
+        **baseline,
+        "mrr_at_10": 0.61,
+        "citation_precision": 0,
+        "citation_coverage": 0,
+        "no_evidence_answer_rate": 0.9,
+    }
+
+    result = evaluate_quality_gate(candidate, baseline, gate_eligible=True)
+
+    assert result["passed"] is False
+    assert result["checks"]["citation_precision_non_regression"] is False
+    assert result["checks"]["citation_coverage_non_regression"] is False
+    assert result["checks"]["no_evidence_answer_non_regression"] is False
+    assert result["checks"]["primary_quality_improved"] is False
 
 
 def test_dynamic_dataset_cannot_be_used_for_quality_gate():
