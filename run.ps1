@@ -28,7 +28,7 @@ $Root = $PSScriptRoot
 $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
 $PortablePython = Join-Path $Root "runtime\python\python.exe"
 $PortableBun = Join-Path $Root "runtime\bun\bun.exe"
-$GatewayPath = Join-Path $Root "server\gateway.js"
+$GatewayPath = Join-Path $Root "server/gateway.js"
 $GatewayArgument = '"' + $GatewayPath + '"'
 $RunStatePath = Join-Path $Root "data\run.json"
 

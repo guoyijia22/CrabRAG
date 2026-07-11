@@ -186,13 +186,16 @@ def doctor(project_root: Path = PROJECT_ROOT) -> tuple[dict[str, object], int]:
                 active_generation=generation_id or None,
             )
         )
-    open_ports = [port for port in SERVICE_PORTS if _port_is_open(port)]
+    service_status = _service_runtime_status(root)
+    open_ports = service_status["open_ports"]
     checks.append(
         _check(
             "service",
-            "ok" if len(open_ports) == len(SERVICE_PORTS) else "warning",
-            "service is running" if len(open_ports) == len(SERVICE_PORTS) else "service is stopped or partially available",
+            "ok" if service_status["complete"] else "warning",
+            "service is running" if service_status["complete"] else "service is stopped or partially available",
             open_ports=open_ports,
+            reported_ports=service_status["reported_ports"],
+            verified=service_status["verified"],
         )
     )
     bun_version = _bun_version(root)
@@ -681,6 +684,14 @@ def _project_process_detected(project_root: Path) -> bool:
 
 def service_is_running(project_root: Path) -> bool:
     root = project_root.resolve()
+    status = _service_runtime_status(root)
+    if status["source"] == "run_state":
+        return bool(status["process_active"])
+    return _project_process_detected(root) or bool(status["complete"])
+
+
+def _service_runtime_status(project_root: Path) -> dict[str, object]:
+    root = project_root.resolve()
     state = _read_json(root / "data" / "run.json")
     state_root = str(state.get("project_root") or "")
     try:
@@ -688,12 +699,38 @@ def service_is_running(project_root: Path) -> bool:
     except OSError:
         state_matches = False
     if state_matches:
-        ports = [state.get("web_port"), state.get("api_port")]
-        valid_ports = [port for port in ports if isinstance(port, int)]
+        valid_ports = [port for port in (state.get("web_port"), state.get("api_port")) if isinstance(port, int)]
         processes = state.get("processes") if isinstance(state.get("processes"), list) else []
-        if any(_run_state_process_matches(item, root, valid_ports) for item in processes):
-            return True
-    return _project_process_detected(root) or any(_port_is_open(port) for port in SERVICE_PORTS)
+        matched = [item for item in processes if _run_state_process_matches(item, root, valid_ports)]
+        matched_roles = {
+            str(item.get("role") or "")
+            for item in matched
+            if isinstance(item, dict)
+        }
+        open_ports = [port for port in valid_ports if _port_is_open(port)]
+        complete = (
+            len(valid_ports) == 2
+            and len(set(valid_ports)) == 2
+            and len(open_ports) == 2
+            and {"api", "web"}.issubset(matched_roles)
+        )
+        return {
+            "source": "run_state",
+            "reported_ports": valid_ports,
+            "open_ports": open_ports,
+            "process_active": bool(matched),
+            "complete": complete,
+            "verified": complete,
+        }
+    open_ports = [port for port in SERVICE_PORTS if _port_is_open(port)]
+    return {
+        "source": "default_ports",
+        "reported_ports": list(SERVICE_PORTS),
+        "open_ports": open_ports,
+        "process_active": False,
+        "complete": len(open_ports) == len(SERVICE_PORTS),
+        "verified": False,
+    }
 
 
 def _terminate_process(pid: int) -> None:

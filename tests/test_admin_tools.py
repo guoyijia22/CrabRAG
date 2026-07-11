@@ -56,6 +56,73 @@ def test_doctor_clean_install_reports_warnings_without_exposing_secrets(tmp_path
     }
 
 
+def _doctor_service_check(report: dict) -> dict:
+    return next(item for item in report["checks"] if item["name"] == "service")
+
+
+def test_doctor_reports_verified_custom_runtime_ports(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    root.mkdir()
+    (root / "VERSION").write_text("1.1.0\n", encoding="utf-8")
+    processes = [
+        {"pid": 101, "role": "api", "start_identity": "api-start"},
+        {"pid": 202, "role": "web", "start_identity": "web-start"},
+    ]
+    _write_run_state(root, processes)
+    monkeypatch.setattr(crabrag_admin, "_run_state_process_matches", lambda item, _root, _ports: item in processes)
+    monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda port: port in {3103, 8101})
+    monkeypatch.setattr(crabrag_admin, "_bun_version", lambda _root: None)
+
+    report, _exit_code = crabrag_admin.doctor(root)
+    service = _doctor_service_check(report)
+
+    assert service["status"] == "ok"
+    assert service["open_ports"] == [3103, 8101]
+    assert service["reported_ports"] == [3103, 8101]
+    assert service["verified"] is True
+
+
+def test_doctor_without_marker_keeps_default_port_detection(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    root.mkdir()
+    (root / "VERSION").write_text("1.1.0\n", encoding="utf-8")
+    monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda port: port in crabrag_admin.SERVICE_PORTS)
+    monkeypatch.setattr(crabrag_admin, "_bun_version", lambda _root: None)
+
+    report, _exit_code = crabrag_admin.doctor(root)
+    service = _doctor_service_check(report)
+
+    assert service["status"] == "ok"
+    assert service["open_ports"] == list(crabrag_admin.SERVICE_PORTS)
+    assert service["reported_ports"] == list(crabrag_admin.SERVICE_PORTS)
+    assert service["verified"] is False
+
+
+def test_doctor_reports_partial_custom_runtime_as_warning(tmp_path: Path, monkeypatch):
+    from scripts import crabrag_admin
+
+    root = tmp_path / "CrabRAG"
+    root.mkdir()
+    (root / "VERSION").write_text("1.1.0\n", encoding="utf-8")
+    processes = [{"pid": 101, "role": "api", "start_identity": "api-start"}]
+    _write_run_state(root, processes)
+    monkeypatch.setattr(crabrag_admin, "_run_state_process_matches", lambda _item, _root, _ports: True)
+    monkeypatch.setattr(crabrag_admin, "_port_is_open", lambda port: port == 8101)
+    monkeypatch.setattr(crabrag_admin, "_bun_version", lambda _root: None)
+
+    report, _exit_code = crabrag_admin.doctor(root)
+    service = _doctor_service_check(report)
+
+    assert service["status"] == "warning"
+    assert service["open_ports"] == [8101]
+    assert service["reported_ports"] == [3103, 8101]
+    assert service["verified"] is False
+
+
 def test_backup_contains_governed_state_and_only_records_external_document_paths(tmp_path: Path):
     from scripts import crabrag_admin
 
@@ -457,7 +524,7 @@ def test_global_bun_web_process_is_trusted_before_bind_when_command_uses_absolut
 def test_windows_runner_passes_absolute_gateway_path_to_bun():
     source = Path("run.ps1").read_text(encoding="utf-8")
 
-    assert '$GatewayPath = Join-Path $Root "server\\gateway.js"' in source
+    assert '$GatewayPath = Join-Path $Root "server/gateway.js"' in source
     assert "$GatewayArgument" in source
     assert '-ArgumentList @($GatewayArgument)' in source
 
