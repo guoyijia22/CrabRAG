@@ -65,16 +65,31 @@ function EvaluationDetail({ detail, language }: { detail: EvaluationRun; languag
   const text = p(language);
   const overall = detail.summary || {};
   const profiles = detail.profiles || [];
+  const dataset = object(detail.question_generation);
+  const datasetLabel = dataset.fixed
+    ? `${text.fixedDataset}: ${String(dataset.dataset_id || "-")} · ${String(dataset.dataset_version || "-")}`
+    : text.dynamicDataset;
   return <section className="evaluation-results">
-    <article className="dashboard-panel"><h2>{text.questionSet}</h2><p><strong>{localizeRuntime(language, overall.best_profile_name || overall.best_profile_id || "-")}</strong></p><p>{localizeRuntime(language, overall.best_reason || "-")}</p><pre>{JSON.stringify(detail.question_generation || {}, null, 2)}</pre></article>
+    <article className="dashboard-panel"><h2>{text.questionSet}</h2><p><strong>{datasetLabel}</strong></p><p><strong>{localizeRuntime(language, overall.best_profile_name || overall.best_profile_id || "-")}</strong></p><p>{localizeRuntime(language, overall.best_reason || "-")}</p><pre>{JSON.stringify(detail.question_generation || {}, null, 2)}</pre></article>
     <h2>{text.profileMetrics}</h2>{profiles.map((profile) => {
       const summary = object(profile.summary); const cases = array(profile.cases);
       return <article className="dashboard-panel" key={String(profile.id || profile.name)}><div className="section-heading"><div><h3>{localizeRuntime(language, profile.name || profile.id || "profile")}</h3><small>{strings(profile.enabled_switches).join(", ")}</small></div><span className="score-chip">{percent(summary.quality_score)}</span></div>
-        <MetricRows values={[[text.successRate, percent(summary.success_rate)], [text.sourceHitRate, percent(summary.source_hit_rate)], [text.graphCoverage, percent(summary.graph_path_coverage)], [text.latency, `${number(summary.avg_latency_ms)} ms`], [text.recommendation, localizeRuntime(language, summary.recommendation || "-")]]} />
+        <MetricRows values={[[text.successRate, percent(summary.success_rate)], [text.sourceHitRate, percent(summary.source_hit_rate)], [text.graphCoverage, percent(summary.graph_path_coverage)], [text.recallAt5, percent(summary.recall_at_5)], [text.mrrAt10, percent(summary.mrr_at_10)], [text.citationPrecision, percent(summary.citation_precision)], [text.citationCoverage, percent(summary.citation_coverage)], [text.noEvidenceRate, percent(summary.no_evidence_answer_rate)], [text.aclLeakage, percent(summary.acl_leakage_rate)], [text.invalidLeakage, percent(summary.invalid_content_leakage_rate)], [text.p95Latency, `${number(summary.p95_latency_ms)} ms`], [text.modelCalls, String(number(summary.model_call_count))], [text.latency, `${number(summary.avg_latency_ms)} ms`], [text.recommendation, localizeRuntime(language, summary.recommendation || "-")]]} />
+        <QualityGate gate={object(summary.quality_gate)} language={language} />
         <h3>{text.cases}</h3><div className="case-list">{cases.map((caseItem, index) => <CaseDetails key={String(caseItem.question_id || index)} item={caseItem} language={language} />)}</div>
       </article>;
     })}
   </section>;
+}
+
+function QualityGate({ gate, language }: { gate: Record<string, unknown>; language: UiLanguage }) {
+  const text = p(language);
+  let label: string = text.gateIneligible;
+  if (gate.passed === true) label = text.gatePassed;
+  else if (gate.passed === false && gate.eligible === true) label = text.gateFailed;
+  else if (Array.isArray(gate.reasons) && gate.reasons.includes("baseline_reference")) label = text.gateBaseline;
+  const reasons = Array.isArray(gate.reasons) ? gate.reasons.map(String).filter((item) => item !== "baseline_reference") : [];
+  return <p className={`alert ${gate.passed === true ? "success" : gate.passed === false ? "error" : ""}`}><strong>{label}</strong>{reasons.length ? `: ${reasons.join(", ")}` : ""}</p>;
 }
 
 function CaseDetails({ item, language }: { item: Record<string, unknown>; language: UiLanguage }) {

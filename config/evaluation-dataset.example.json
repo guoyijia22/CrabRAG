@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "dataset_id": "replace-with-your-dataset-id",
+  "dataset_version": "1.0.0",
+  "description": "Copy to config/evaluation-dataset.json and replace every synthetic ID with IDs from the active governed index.",
+  "cases": [
+    {
+      "id": "known-answer",
+      "question": "Replace with a question whose evidence is stable and reviewed.",
+      "history": [],
+      "expect_references": true,
+      "expected_chunk_ids": [
+        "synthetic-chunk-id"
+      ],
+      "allowed_document_ids": [
+        "synthetic-public-document-id"
+      ],
+      "retired_document_ids": [
+        "synthetic-retired-document-id"
+      ]
+    },
+    {
+      "id": "no-evidence-boundary",
+      "question": "Replace with a question that is intentionally outside the knowledge base.",
+      "history": [],
+      "expect_references": false,
+      "expected_chunk_ids": [],
+      "allowed_document_ids": [],
+      "retired_document_ids": []
+    }
+  ]
+}

@@ -14,6 +14,7 @@ from services.rag_api.evaluation.dataset import (
 from services.rag_api.evaluation.quality import calculate_quality_metrics, evaluate_quality_gate
 from services.rag_api.llm.call_metrics import record_model_call
 from services.rag_api.rag_settings import RagSettings
+from services.rag_api.rag_settings import PROJECT_ROOT
 
 
 def _dataset_payload() -> dict:
@@ -58,6 +59,14 @@ def test_fixed_dataset_loads_with_stable_fingerprint_and_question_set(tmp_path: 
         "dataset_version": "2026.07.1",
         "dataset_fingerprint": first["fingerprint"],
     }
+
+
+def test_shipped_fixed_dataset_example_is_valid_but_not_activated_by_default():
+    example = load_evaluation_dataset(PROJECT_ROOT / "config" / "evaluation-dataset.example.json")
+
+    assert example is not None
+    assert example["fixed"] is True
+    assert example["dataset_id"] == "replace-with-your-dataset-id"
 
 
 @pytest.mark.parametrize(
