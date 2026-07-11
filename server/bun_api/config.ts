@@ -29,9 +29,10 @@ export function readGatewayEnvironment(env: NodeJS.ProcessEnv = process.env): Ga
   };
 }
 
-export function ragHeaders(config: GatewayConfig, includeJson = false): Headers {
+export function ragHeaders(config: GatewayConfig, includeJson = false, authorization?: string): Headers {
   const headers = new Headers();
   if (includeJson) headers.set("content-type", "application/json");
+  if (authorization) headers.set("authorization", authorization);
   headers.set("x-crabrag-internal-token", config.internalToken);
   headers.set("x-crabrag-subject", config.subject);
   headers.set("x-crabrag-roles", config.roles);

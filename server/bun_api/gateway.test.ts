@@ -53,6 +53,7 @@ describe("trusted RAG proxy", () => {
         "x-crabrag-groups": "attackers",
         "x-crabrag-permission-revision": "999",
         "x-crabrag-admin": "false",
+        authorization: "Bearer browser-jwt",
       },
       body: JSON.stringify({ question: "hello" }),
     });
@@ -60,6 +61,7 @@ describe("trusted RAG proxy", () => {
     expect(response.status).toBe(200);
     expect(Object.fromEntries(forwarded!.entries())).toEqual({
       "content-type": "application/json",
+      authorization: "Bearer browser-jwt",
       "x-crabrag-admin": "true",
       "x-crabrag-groups": "north",
       "x-crabrag-internal-token": "server-token",
@@ -112,6 +114,32 @@ describe("trusted RAG proxy", () => {
       expect(call.headers.get("x-crabrag-internal-token")).toBe("server-token");
     }
     expect(calls[4].headers.get("content-type")).toBe("application/json");
+  });
+
+  test("forwards browser Authorization only on governed routes", async () => {
+    const calls: Headers[] = [];
+    const app = createApp({
+      config: trustedConfig,
+      fetch: async (_input, init) => {
+        calls.push(new Headers(init?.headers));
+        return Response.json({ ok: true });
+      },
+      webDistDir: await temporaryDirectory(),
+    });
+
+    await app.request("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer signed-jwt" },
+      body: JSON.stringify({ question: "hello" }),
+    });
+    await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: "Bearer signed-jwt" },
+      body: JSON.stringify({ retrieval_top_k: 5 }),
+    });
+
+    expect(calls[0].get("authorization")).toBe("Bearer signed-jwt");
+    expect(calls[1].get("authorization")).toBeNull();
   });
 
   test("preserves backend status and returns JSON content type", async () => {

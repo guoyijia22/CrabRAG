@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-import os
 import uuid
 
 from fastapi import FastAPI, Query, Request, Response
@@ -29,11 +28,15 @@ from services.rag_api.schemas import ChatRequest, ChatResponse, ConfigUpdateRequ
 from services.rag_api.vector.chroma_store import collection_status, validate_generation_collections
 from services.rag_api import index_generation
 from services.rag_api.index_scheduler import INDEX_SCHEDULER
+from services.rag_api.identity import (
+    IdentityAuthenticationError,
+    IdentityProviderUnavailable,
+    get_identity_provider,
+)
 from services.rag_api.retrieval.cache import RETRIEVAL_CACHE
 from services.rag_api.security import (
     PermissionServiceError,
     build_retrieval_context,
-    principal_from_headers,
     use_retrieval_context,
 )
 from services.rag_api.version import SOFTWARE_VERSION, build_info, onnxruntime_capability
@@ -238,7 +241,7 @@ def local_model_capabilities() -> dict:
 
 @app.get("/api/index/status")
 def index_status(http_request: Request) -> dict:
-    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    principal = _authenticate_principal(http_request)
     if not principal.can_manage_index:
         raise HTTPException(status_code=403, detail="index management permission required")
     try:
@@ -259,7 +262,7 @@ def index_status(http_request: Request) -> dict:
 
 @app.post("/api/index/rollback")
 def rollback_index(http_request: Request) -> dict:
-    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    principal = _authenticate_principal(http_request)
     if not principal.can_manage_index:
         raise HTTPException(status_code=403, detail="index management permission required")
     try:
@@ -404,7 +407,7 @@ def graph_subgraph(payload: dict, http_request: Request) -> dict:
 
 
 def _request_retrieval_context(http_request: Request):
-    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    principal = _authenticate_principal(http_request)
     try:
         return principal, build_retrieval_context(principal)
     except PermissionServiceError as exc:
@@ -412,10 +415,19 @@ def _request_retrieval_context(http_request: Request):
 
 
 def _require_index_admin(http_request: Request):
-    principal = principal_from_headers(http_request.headers, internal_token=os.getenv("CRABRAG_INTERNAL_TOKEN"))
+    principal = _authenticate_principal(http_request)
     if not principal.can_manage_index:
         raise HTTPException(status_code=403, detail="需要索引管理权限")
     return principal
+
+
+def _authenticate_principal(http_request: Request):
+    try:
+        return get_identity_provider().authenticate(http_request.headers)
+    except IdentityAuthenticationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except IdentityProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def _admin_retrieval_context(http_request: Request):

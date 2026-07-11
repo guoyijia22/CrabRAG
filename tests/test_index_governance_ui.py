@@ -20,21 +20,21 @@ def test_gateway_forwards_trusted_identity_to_all_admin_routes():
     routes = (ROOT / "server" / "bun_api" / "routes.ts").read_text(encoding="utf-8")
 
     expected_calls = [
-        'api("/evaluations/run"), { method: "POST", headers: governed() }',
-        'api("/evaluations"), { headers: governed() }',
-        'api("/evaluations/active"), { headers: governed() }',
-        'api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }',
-        'api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }',
-        'api("/ingest"), { method: "POST", headers: governed() }',
-        'api("/ingest/run"), { method: "POST", headers: governed() }',
-        'api("/ingest/full"), { method: "POST", headers: governed() }',
-        'api("/ingest/active"), { headers: governed() }',
-        'api(`/ingest/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }',
-        'api(`/ingest/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }',
-        '`${api("/logs")}${new URL(c.req.url).search}`, { headers: governed() }',
-        'api("/graph/schema"), { headers: governed() }',
-        'api("/graph/schema/suggestion"), { headers: governed() }',
-        'api("/graph/schema"), {\n    method: "PUT", headers: governed(true),',
+        'api("/evaluations/run"), { method: "POST", headers: governed(c.req.raw) }',
+        'api("/evaluations"), { headers: governed(c.req.raw) }',
+        'api("/evaluations/active"), { headers: governed(c.req.raw) }',
+        'api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed(c.req.raw) }',
+        'api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed(c.req.raw) }',
+        'api("/ingest"), { method: "POST", headers: governed(c.req.raw) }',
+        'api("/ingest/run"), { method: "POST", headers: governed(c.req.raw) }',
+        'api("/ingest/full"), { method: "POST", headers: governed(c.req.raw) }',
+        'api("/ingest/active"), { headers: governed(c.req.raw) }',
+        'api(`/ingest/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed(c.req.raw) }',
+        'api(`/ingest/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed(c.req.raw) }',
+        '`${api("/logs")}${new URL(c.req.url).search}`, { headers: governed(c.req.raw) }',
+        'api("/graph/schema"), { headers: governed(c.req.raw) }',
+        'api("/graph/schema/suggestion"), { headers: governed(c.req.raw) }',
+        'api("/graph/schema"), {\n    method: "PUT", headers: governed(c.req.raw, true),',
     ]
 
     for expected in expected_calls:

@@ -13,33 +13,35 @@ export interface RouteDependencies {
 export function createApiRoutes({ config, fetcher, projectRoot }: RouteDependencies): Hono {
   const app = new Hono();
   const api = (path: string) => `${config.ragBaseUrl}/api${path}`;
-  const governed = (json = false) => ragHeaders(config, json);
+  const governed = (request: Request, json = false) => (
+    ragHeaders(config, json, request.headers.get("authorization") ?? undefined)
+  );
   const body = async (request: { json: () => Promise<unknown> }) => JSON.stringify(await request.json());
 
   app.post("/chat", async (c) => proxyJson(fetcher, api("/chat"), {
-    method: "POST", headers: governed(true), body: await body(c.req),
+    method: "POST", headers: governed(c.req.raw, true), body: await body(c.req),
   }));
-  app.get("/categories", async () => proxyJson(fetcher, api("/categories"), { headers: governed() }));
+  app.get("/categories", async (c) => proxyJson(fetcher, api("/categories"), { headers: governed(c.req.raw) }));
 
   app.get("/config", async (c) => c.json(await readAppConfig(projectRoot)));
   app.put("/config", async (c) => proxyJson(fetcher, api("/config"), {
     method: "PUT", headers: { "content-type": "application/json" }, body: await body(c.req),
   }));
 
-  app.post("/evaluations/run", async () => proxyJson(fetcher, api("/evaluations/run"), { method: "POST", headers: governed() }));
-  app.get("/evaluations", async () => proxyJson(fetcher, api("/evaluations"), { headers: governed() }));
-  app.get("/evaluations/active", async () => proxyJson(fetcher, api("/evaluations/active"), { headers: governed() }));
-  app.get("/evaluations/:runId/progress", async (c) => proxyJson(fetcher, api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }));
-  app.get("/evaluations/:runId", async (c) => proxyJson(fetcher, api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }));
+  app.post("/evaluations/run", async (c) => proxyJson(fetcher, api("/evaluations/run"), { method: "POST", headers: governed(c.req.raw) }));
+  app.get("/evaluations", async (c) => proxyJson(fetcher, api("/evaluations"), { headers: governed(c.req.raw) }));
+  app.get("/evaluations/active", async (c) => proxyJson(fetcher, api("/evaluations/active"), { headers: governed(c.req.raw) }));
+  app.get("/evaluations/:runId/progress", async (c) => proxyJson(fetcher, api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed(c.req.raw) }));
+  app.get("/evaluations/:runId", async (c) => proxyJson(fetcher, api(`/evaluations/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed(c.req.raw) }));
 
-  app.get("/graph", async () => proxyJson(fetcher, api("/graph"), { headers: governed() }));
+  app.get("/graph", async (c) => proxyJson(fetcher, api("/graph"), { headers: governed(c.req.raw) }));
   app.post("/graph/subgraph", async (c) => proxyJson(fetcher, api("/graph/subgraph"), {
-    method: "POST", headers: governed(true), body: await body(c.req),
+    method: "POST", headers: governed(c.req.raw, true), body: await body(c.req),
   }));
-  app.get("/graph/schema", async () => proxyJson(fetcher, api("/graph/schema"), { headers: governed() }));
-  app.get("/graph/schema/suggestion", async () => proxyJson(fetcher, api("/graph/schema/suggestion"), { headers: governed() }));
+  app.get("/graph/schema", async (c) => proxyJson(fetcher, api("/graph/schema"), { headers: governed(c.req.raw) }));
+  app.get("/graph/schema/suggestion", async (c) => proxyJson(fetcher, api("/graph/schema/suggestion"), { headers: governed(c.req.raw) }));
   app.put("/graph/schema", async (c) => proxyJson(fetcher, api("/graph/schema"), {
-    method: "PUT", headers: governed(true), body: await body(c.req),
+    method: "PUT", headers: governed(c.req.raw, true), body: await body(c.req),
   }));
 
   app.get("/health", async (c) => {
@@ -51,17 +53,17 @@ export function createApiRoutes({ config, fetcher, projectRoot }: RouteDependenc
     }
   });
 
-  app.get("/index/status", async () => proxyJson(fetcher, api("/index/status"), { headers: governed() }));
-  app.post("/index/rollback", async () => proxyJson(fetcher, api("/index/rollback"), { method: "POST", headers: governed() }));
+  app.get("/index/status", async (c) => proxyJson(fetcher, api("/index/status"), { headers: governed(c.req.raw) }));
+  app.post("/index/rollback", async (c) => proxyJson(fetcher, api("/index/rollback"), { method: "POST", headers: governed(c.req.raw) }));
 
-  app.post("/ingest", async () => proxyJson(fetcher, api("/ingest"), { method: "POST", headers: governed() }));
-  app.post("/ingest/run", async () => proxyJson(fetcher, api("/ingest/run"), { method: "POST", headers: governed() }));
-  app.post("/ingest/full", async () => proxyJson(fetcher, api("/ingest/full"), { method: "POST", headers: governed() }));
-  app.get("/ingest/active", async () => proxyJson(fetcher, api("/ingest/active"), { headers: governed() }));
-  app.get("/ingest/:runId/progress", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed() }));
-  app.get("/ingest/:runId", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed() }));
+  app.post("/ingest", async (c) => proxyJson(fetcher, api("/ingest"), { method: "POST", headers: governed(c.req.raw) }));
+  app.post("/ingest/run", async (c) => proxyJson(fetcher, api("/ingest/run"), { method: "POST", headers: governed(c.req.raw) }));
+  app.post("/ingest/full", async (c) => proxyJson(fetcher, api("/ingest/full"), { method: "POST", headers: governed(c.req.raw) }));
+  app.get("/ingest/active", async (c) => proxyJson(fetcher, api("/ingest/active"), { headers: governed(c.req.raw) }));
+  app.get("/ingest/:runId/progress", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}/progress`), { headers: governed(c.req.raw) }));
+  app.get("/ingest/:runId", async (c) => proxyJson(fetcher, api(`/ingest/${encodeURIComponent(c.req.param("runId"))}`), { headers: governed(c.req.raw) }));
 
-  app.get("/logs", async (c) => proxyJson(fetcher, `${api("/logs")}${new URL(c.req.url).search}`, { headers: governed() }));
+  app.get("/logs", async (c) => proxyJson(fetcher, `${api("/logs")}${new URL(c.req.url).search}`, { headers: governed(c.req.raw) }));
 
   app.get("/settings", async () => proxyJson(fetcher, api("/settings")));
   app.put("/settings", async (c) => proxyJson(fetcher, api("/settings"), {
