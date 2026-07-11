@@ -538,5 +538,5 @@ def test_frontend_evaluation_english_language_covers_dynamic_results():
         assert english in source
     assert '"/api/evaluations/active"' in source
     assert '"/api/evaluations/run"' in source
-    assert "getEvaluationProgress(runId)" in source
-    assert "getEvaluation(runId)" in source
+    assert "loadProgress: getEvaluationProgress" in source
+    assert "loadCompleted: (runId) => getEvaluation(runId)" in source

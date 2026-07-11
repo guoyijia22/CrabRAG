@@ -5,11 +5,11 @@ import {
   getIngestResult, postIndexRollback, postIngest, putGraphSchema,
 } from "../api/client";
 import type { GraphSchema, HealthResponse, IndexStatus, IngestProgress, IngestResult, UiLanguage } from "../api/types";
+import { useTaskPoller } from "../hooks/useTaskPoller";
 import { localizeRuntime, p } from "../page-i18n";
 
 interface KnowledgePageProps { language: UiLanguage; governanceOnly?: boolean }
 
-const delay = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 const errorText = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
 
 function value(object: Record<string, unknown> | undefined, key: string, fallback: unknown = "-") {
@@ -25,6 +25,17 @@ export function KnowledgePage({ language, governanceOnly = false }: KnowledgePag
   const [result, setResult] = useState<IngestResult>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const { watch: watchIngest } = useTaskPoller<IngestProgress, IngestResult>({
+    loadProgress: getIngestProgress,
+    loadCompleted: getIngestResult,
+    onProgress: setProgress,
+    onCompleted: (completed) => {
+      setResult(completed);
+      window.dispatchEvent(new Event("crabrag:knowledge-base-rebuilt"));
+    },
+    onFailed: (failed) => { if (failed.error) setError(failed.error); },
+    onError: (reason) => setError(errorText(reason)),
+  });
 
   async function load() {
     setError("");
@@ -44,21 +55,6 @@ export function KnowledgePage({ language, governanceOnly = false }: KnowledgePag
   }
 
   useEffect(() => { void load(); }, []);
-
-  async function watchIngest(runId: string) {
-    for (;;) {
-      const next = await getIngestProgress(runId);
-      setProgress(next);
-      if (next.status === "completed") {
-        const completed = await getIngestResult(runId);
-        setResult(completed);
-        window.dispatchEvent(new Event("crabrag:knowledge-base-rebuilt"));
-        return;
-      }
-      if (next.status === "failed") return;
-      await delay(1000);
-    }
-  }
 
   async function rebuild(full: boolean) {
     if (full && !window.confirm(text.confirmFull)) return;

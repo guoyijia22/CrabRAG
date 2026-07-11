@@ -2,9 +2,8 @@ import { useEffect, useState } from "react";
 
 import { getActiveEvaluation, getEvaluation, getEvaluationProgress, getEvaluations, postEvaluationRun } from "../api/client";
 import type { EvaluationProgress, EvaluationRun, EvaluationRunSummary, UiLanguage } from "../api/types";
+import { useTaskPoller } from "../hooks/useTaskPoller";
 import { localizeRuntime, p } from "../page-i18n";
-
-const delay = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 export function EvaluationPage({ language }: { language: UiLanguage }) {
   const text = p(language);
@@ -13,6 +12,14 @@ export function EvaluationPage({ language }: { language: UiLanguage }) {
   const [detail, setDetail] = useState<EvaluationRun>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const { watch } = useTaskPoller<EvaluationProgress, EvaluationRun>({
+    loadProgress: getEvaluationProgress,
+    loadCompleted: (runId) => getEvaluation(runId),
+    onProgress: setProgress,
+    onCompleted: setDetail,
+    onFailed: (failed) => { if (failed.error) setError(failed.error); },
+    onError: (reason) => setError(errorText(reason)),
+  });
 
   async function load() {
     setError("");
@@ -26,16 +33,6 @@ export function EvaluationPage({ language }: { language: UiLanguage }) {
     if (failure?.status === "rejected") setError(errorText(failure.reason));
   }
   useEffect(() => { void load(); }, []);
-
-  async function watch(runId: string) {
-    for (;;) {
-      const next = await getEvaluationProgress(runId);
-      setProgress(next);
-      if (next.status === "completed") { setDetail(await getEvaluation(runId)); return; }
-      if (next.status === "failed") { if (next.error) setError(next.error); return; }
-      await delay(1000);
-    }
-  }
 
   async function run() {
     setBusy(true); setError(""); setDetail(undefined);

@@ -154,4 +154,20 @@ describe("settings", () => {
     expect(screen.getByText("Save to:")).not.toBeNull();
     expect(screen.getByRole("link", { name: "Download (Hugging Face)" }).getAttribute("href")).toContain("huggingface.co");
   });
+
+  test("keeps unsaved settings drafts when the shell language changes", async () => {
+    const fetchMock = mockApi();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    const name = await screen.findByLabelText("系统名称");
+    await user.clear(name);
+    await user.type(name, "CrabRAG Draft");
+    await user.click(screen.getByRole("button", { name: "English" }));
+
+    expect(await screen.findByDisplayValue("CrabRAG Draft")).not.toBeNull();
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "/api/app-settings" && !init)).toHaveLength(2);
+  });
 });

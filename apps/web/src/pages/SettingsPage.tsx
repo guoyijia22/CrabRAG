@@ -56,6 +56,9 @@ const defaultRagSettings: RagSettings = {
   rerank_model: "BAAI/bge-reranker-v2-m3",
 };
 
+type StatusKey = keyof typeof copy.zh;
+interface SettingsStatus { key: StatusKey; detail?: string }
+
 function lines(value: string): string[] {
   return value.split(/\r?\n/).map((item) => item.trim()).filter((item, index, values) => item && values.indexOf(item) === index);
 }
@@ -208,25 +211,25 @@ export function SettingsPage({ language, onAppSettingsSaved }: SettingsPageProps
   const [model, setModel] = useState<ModelSettings | null>(null);
   const [rag, setRag] = useState<RagSettings | null>(null);
   const [secrets, setSecrets] = useState({ llm: "", embedding: "", rerank: "" });
-  const [status, setStatus] = useState<string>(text.loading);
+  const [status, setStatus] = useState<SettingsStatus>({ key: "loading" });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let active = true;
-    setStatus(text.loading);
+    setStatus({ key: "loading" });
     Promise.all([getAppSettings(), getModelSettings(), getRagSettings()])
       .then(([appPayload, modelPayload, ragPayload]) => {
         if (!active) return;
-        setApp(appPayload); setModel(modelPayload); setRag(ragPayload); setStatus(text.loaded);
+        setApp(appPayload); setModel(modelPayload); setRag(ragPayload); setStatus({ key: "loaded" });
       })
-      .catch((reason: unknown) => active && setStatus(`${text.loadFailed}: ${reason instanceof Error ? reason.message : String(reason)}`));
+      .catch((reason: unknown) => active && setStatus({ key: "loadFailed", detail: reason instanceof Error ? reason.message : String(reason) }));
     return () => { active = false; };
-  }, [text.loadFailed, text.loaded, text.loading]);
+  }, []);
 
   async function save() {
     if (!app || !model || !rag) return;
     setSaving(true);
-    setStatus(text.saving);
+    setStatus({ key: "saving" });
     const modelUpdate: ModelSettingsUpdate = {
       use_local_models: model.use_local_models,
       api_key: secrets.llm || null,
@@ -248,9 +251,9 @@ export function SettingsPage({ language, onAppSettingsSaved }: SettingsPageProps
       const [freshApp, freshModel, freshRag] = await Promise.all([getAppSettings(), getModelSettings(), getRagSettings()]);
       setApp(freshApp); setModel(freshModel); setRag(freshRag); setSecrets({ llm: "", embedding: "", rerank: "" });
       onAppSettingsSaved(freshApp);
-      setStatus(text.saved);
+      setStatus({ key: "saved" });
     } catch (reason) {
-      setStatus(`${text.saveFailed}: ${reason instanceof Error ? reason.message : String(reason)}`);
+      setStatus({ key: "saveFailed", detail: reason instanceof Error ? reason.message : String(reason) });
     } finally {
       setSaving(false);
     }
@@ -260,9 +263,9 @@ export function SettingsPage({ language, onAppSettingsSaved }: SettingsPageProps
     <main className="settings-page page-card">
       <div className="page-heading">
         <div><span className="eyebrow">CrabRAG · v1.1.0</span><h1>{text.title}</h1><p>{text.subtitle}</p></div>
-        <div className="page-actions"><button type="button" onClick={() => { setRag({ ...defaultRagSettings }); setStatus(text.resetReady); }} disabled={!rag || saving}>{text.reset}</button><button className="primary-button" type="button" onClick={save} disabled={!app || !model || !rag || saving}>{saving ? text.saving : text.save}</button></div>
+        <div className="page-actions"><button type="button" onClick={() => { setRag({ ...defaultRagSettings }); setStatus({ key: "resetReady" }); }} disabled={!rag || saving}>{text.reset}</button><button className="primary-button" type="button" onClick={save} disabled={!app || !model || !rag || saving}>{saving ? text.saving : text.save}</button></div>
       </div>
-      <div className="alert" role="status">{status}</div>
+      <div className="alert" role="status">{text[status.key]}{status.detail ? `: ${status.detail}` : ""}</div>
       {app && <AppConfiguration value={app} language={language} onChange={setApp} />}
       {model && <ModelConfiguration value={model} language={language} onChange={setModel} secrets={secrets} onSecretChange={(name, value) => setSecrets((current) => ({ ...current, [name]: value }))} />}
       {rag && <RagConfiguration value={rag} language={language} onChange={setRag} />}

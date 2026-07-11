@@ -71,4 +71,36 @@ describe("evaluation", () => {
     expect(screen.getByText("Recommended")).not.toBeNull();
     expect(screen.getByText(/Evaluation completed/)).not.toBeNull();
   });
+
+  test("reports active evaluation polling failures and stops after unmount", async () => {
+    const fetchMock = mockApi({
+      "/api/evaluations": { items: [] },
+      "/api/evaluations/active": { run_id: "eval-error", status: "running", percent: 10 },
+      "/api/evaluations/eval-error/progress": new Response(JSON.stringify({ detail: "evaluation poll unavailable" }), { status: 503 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(<App />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "评测对比" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("evaluation poll unavailable");
+    view.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/evaluations/eval-error/progress")).toHaveLength(1);
+  });
+
+  test("cancels a running evaluation timer when the page unmounts", async () => {
+    const fetchMock = mockApi({
+      "/api/evaluations": { items: [] },
+      "/api/evaluations/active": { run_id: "eval-running", status: "running", percent: 10 },
+      "/api/evaluations/eval-running/progress": { run_id: "eval-running", status: "running", percent: 20 },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(<App />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "评测对比" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === "/api/evaluations/eval-running/progress")).toHaveLength(1));
+    view.unmount();
+
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/evaluations/eval-running/progress")).toHaveLength(1);
+  });
 });

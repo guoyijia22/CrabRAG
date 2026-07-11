@@ -90,4 +90,56 @@ describe("knowledge base and index governance", () => {
     expect(await screen.findByText("需要索引管理权限")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "回滚到上一代" })).toBeNull();
   });
+
+  test("reports polling failures instead of leaving an unhandled watcher", async () => {
+    vi.stubGlobal("fetch", mockApi({
+      "/api/health": health,
+      "/api/ingest/active": { active: { run_id: "ingest-error", status: "running", percent: 10 }, last_success: null },
+      "/api/graph/schema/suggestion": { status: "idle" },
+      "/api/index/status": indexStatus,
+      "/api/ingest/ingest-error/progress": new Response(JSON.stringify({ detail: "poll unavailable" }), { status: 503 }),
+    }));
+    render(<App />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "知识库" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("poll unavailable");
+  });
+
+  test("cancels the active watcher when the page unmounts", async () => {
+    const fetchMock = mockApi({
+      "/api/health": health,
+      "/api/ingest/active": { active: { run_id: "ingest-running", status: "running", percent: 10 }, last_success: null },
+      "/api/graph/schema/suggestion": { status: "idle" },
+      "/api/index/status": indexStatus,
+      "/api/ingest/ingest-running/progress": { run_id: "ingest-running", status: "running", percent: 20 },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(<App />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "知识库" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === "/api/ingest/ingest-running/progress")).toHaveLength(1));
+    view.unmount();
+
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/ingest/ingest-running/progress")).toHaveLength(1);
+  });
+
+  test("reuses the watcher when start returns the already active run", async () => {
+    const fetchMock = mockApi({
+      "/api/health": health,
+      "/api/ingest/active": { active: { run_id: "ingest-shared", status: "running", percent: 10 }, last_success: null },
+      "/api/graph/schema/suggestion": { status: "idle" },
+      "/api/index/status": indexStatus,
+      "/api/ingest/run": { run_id: "ingest-shared", status: "running", percent: 10 },
+      "/api/ingest/ingest-shared/progress": { run_id: "ingest-shared", status: "running", percent: 20 },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "知识库" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === "/api/ingest/ingest-shared/progress")).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: "增量更新" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/ingest/ingest-shared/progress")).toHaveLength(1);
+  });
 });
