@@ -118,6 +118,15 @@ def test_release_powershell_wrapper_and_ci_contracts_are_present():
     assert '"release:windows"' in package
 
 
+def test_ubuntu_core_tests_use_the_development_python_not_release_venv():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+
+    assert "python -m pytest -q" in workflow
+    assert "./.venv/bin/python -m pytest" not in workflow
+    assert "pytest==" not in requirements
+
+
 def test_release_installer_and_stop_scripts_do_not_depend_on_excluded_development_files():
     install_ps1 = Path("install.ps1").read_text(encoding="utf-8")
     install_sh = Path("install.sh").read_text(encoding="utf-8")
