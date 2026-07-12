@@ -5,13 +5,13 @@ import { App } from "./App";
 import { appSettings, mockApi, modelSettings, ragSettings } from "./test/fixtures";
 
 describe("application shell", () => {
-  test("shows the v1.3.0 CrabRAG default and all Chinese and English navigation labels", async () => {
+  test("shows the v1.3.1 CrabRAG default and all Chinese and English navigation labels", async () => {
     vi.stubGlobal("fetch", mockApi());
     const user = userEvent.setup();
     render(<App />);
 
     expect((await screen.findAllByText("CrabRAG")).length).toBeGreaterThan(0);
-    expect(screen.getByText("v1.3.0")).not.toBeNull();
+    expect(screen.getByText("v1.3.1")).not.toBeNull();
     expect(screen.getByRole("button", { name: "问答" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "索引治理" })).not.toBeNull();
 

@@ -29,6 +29,16 @@ You can also start the app with:
 .\start.bat
 ```
 
+Press `Ctrl+C` in the foreground launcher to stop both the API and web gateway and remove `data/run.json`. Do not rely on closing the terminal window, because Windows may terminate the launcher before its cleanup block finishes.
+
+Use the verified administrative stop command when CrabRAG is running in the background, the original window is unavailable, processes or runtime state remain, custom ports are in use, or before backup or restore operations:
+
+```powershell
+.\stop.bat
+```
+
+If the service is already stopped, `stop.bat` returns safely and removes only trusted stale runtime state. It validates the project path, process identity, role, start time, and owned ports before terminating a process.
+
 If PowerShell blocks script execution, use:
 
 ```powershell
@@ -162,7 +172,7 @@ Model credentials held by the operating-system keyring are not included in backu
 Build the Windows x64 release and its SHA-256 file:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 1.3.0 -OutputDir .\release
+.\scripts\build_release.ps1 -Version 1.3.1 -OutputDir .\release
 ```
 
 To rebuild from a clean virtual environment, delete `.venv` and rerun the installer:

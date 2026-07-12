@@ -66,7 +66,7 @@ export function App() {
       <AppHeader settings={settings} page={page} busy={settingsBusy} onPageChange={setPage} onSettingsChange={persistAppSettings} />
       {bootError && <div className="global-alert alert error" role="alert">{bootError}</div>}
       {page === "chat" && <ChatPage settings={settings} onSettingsChange={setSettings} />}
-      {page === "knowledge" && <KnowledgePage language={settings.ui_language} />}
+      {page === "knowledge" && <KnowledgePage language={settings.ui_language} onOpenGovernance={() => setPage("governance")} />}
       {page === "governance" && <KnowledgePage language={settings.ui_language} governanceOnly />}
       {page === "graph" && <GraphPage language={settings.ui_language} />}
       {page === "logs" && <LogsPage language={settings.ui_language} />}

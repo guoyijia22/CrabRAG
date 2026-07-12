@@ -8,7 +8,7 @@ import type { GraphSchema, HealthResponse, IndexStatus, IngestProgress, IngestRe
 import { useTaskPoller } from "../hooks/useTaskPoller";
 import { localizeRuntime, p } from "../page-i18n";
 
-interface KnowledgePageProps { language: UiLanguage; governanceOnly?: boolean }
+interface KnowledgePageProps { language: UiLanguage; governanceOnly?: boolean; onOpenGovernance?: () => void }
 
 const errorText = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
 
@@ -16,7 +16,7 @@ function value(object: Record<string, unknown> | undefined, key: string, fallbac
   return object?.[key] ?? fallback;
 }
 
-export function KnowledgePage({ language, governanceOnly = false }: KnowledgePageProps) {
+export function KnowledgePage({ language, governanceOnly = false, onOpenGovernance }: KnowledgePageProps) {
   const text = p(language);
   const [health, setHealth] = useState<HealthResponse>();
   const [index, setIndex] = useState<IndexStatus>();
@@ -103,12 +103,19 @@ export function KnowledgePage({ language, governanceOnly = false }: KnowledgePag
         {(progress || result) && <section className="dashboard-panel"><h2>{result ? text.result : text.progress}</h2>{progress && <><progress max="100" value={progress.percent || 0} /><p>{localizeRuntime(language, progress.current_step || progress.message)} · {progress.percent || 0}%</p>{progress.error && <div className="alert error">{localizeRuntime(language, progress.error)}</div>}</>}{result && <MetricGrid values={[[text.activeGeneration, result.generation_id], [text.documents, result.document_count], [text.chunks, result.chunk_count], [text.reused, result.reused_embedding_count], [text.recomputed, result.embedded_chunk_count], [text.dimension, result.embedding_dimension], [`${text.graphTitle} · ${language === "zh" ? "节点" : "nodes"}`, result.graph_node_count], [`${text.graphTitle} · ${language === "zh" ? "边" : "edges"}`, result.graph_edge_count]]} />}</section>}
         <section className="dashboard-panel"><div className="section-heading"><h2>{text.schema}</h2>{schema && <button type="button" onClick={confirmSchema} disabled={busy}>{text.confirmSchema}</button>}</div>{schema ? <><div className="tag-row">{(schema.entity_types || []).map((item) => <span className="tag" key={item}>{item}</span>)}</div><dl className="property-list">{[...(schema.node_fields || []), ...(schema.edge_fields || [])].map((field) => <div key={`${field.key}-${field.label}`}><dt>{field.label || field.key}</dt><dd><code>{field.key}</code>{field.type ? ` · ${field.type}` : ""}</dd></div>)}</dl></> : <p className="empty-state">-</p>}</section>
       </>}
-      <section className="dashboard-panel governance-panel">
-        <div className="section-heading"><h2>{text.governanceTitle}</h2>{index?.can_rollback && <button className="danger-button" type="button" onClick={rollback} disabled={busy}>{text.rollback}</button>}</div>
-        <MetricGrid values={[[text.activeGeneration, index?.active_generation], [text.previousGeneration, index?.previous_generation], [text.documents, value(stats, "document_count")], [text.chunks, value(stats, "chunk_count")], [text.reused, value(stats, "reused_embedding_count")], [text.recomputed, value(stats, "embedded_chunk_count")], [text.dimension, value(stats, "embedding_dimension")]]} />
-        <div className="dashboard-grid three"><JsonPanel title={text.scheduler} value={index?.scheduler} /><JsonPanel title={text.cache} value={index?.cache} /><JsonPanel title={text.cleanup} value={(index?.scheduler?.last_cleanup as Record<string, unknown> | undefined) || {}} /></div>
-        <h3>{text.warnings}</h3>{warnings.length ? <ul className="warning-list">{warnings.map((warning, i) => <li key={i}>{String(warning.code || "warning")}{warning.path ? ` · ${String(warning.path)}` : ""}</li>)}</ul> : <p className="empty-state">{text.noWarnings}</p>}
-      </section>
+      {governanceOnly ? (
+        <section className="dashboard-panel governance-panel">
+          <div className="section-heading"><h2>{text.governanceTitle}</h2>{index?.can_rollback && <button className="danger-button" type="button" onClick={rollback} disabled={busy}>{text.rollback}</button>}</div>
+          <MetricGrid values={[[text.activeGeneration, index?.active_generation], [text.previousGeneration, index?.previous_generation], [text.documents, value(stats, "document_count")], [text.chunks, value(stats, "chunk_count")], [text.reused, value(stats, "reused_embedding_count")], [text.recomputed, value(stats, "embedded_chunk_count")], [text.dimension, value(stats, "embedding_dimension")]]} />
+          <div className="dashboard-grid three"><JsonPanel title={text.scheduler} value={index?.scheduler} /><JsonPanel title={text.cache} value={index?.cache} /><JsonPanel title={text.cleanup} value={(index?.scheduler?.last_cleanup as Record<string, unknown> | undefined) || {}} /></div>
+          <h3>{text.warnings}</h3>{warnings.length ? <ul className="warning-list">{warnings.map((warning, i) => <li key={i}>{String(warning.code || "warning")}{warning.path ? ` · ${String(warning.path)}` : ""}</li>)}</ul> : <p className="empty-state">{text.noWarnings}</p>}
+        </section>
+      ) : (
+        <section className="dashboard-panel governance-summary">
+          <div className="section-heading"><h2>{text.governanceTitle}</h2><button type="button" onClick={onOpenGovernance}>{text.viewGovernance}</button></div>
+          <MetricGrid values={[[text.activeGeneration, index?.active_generation], [text.documents, value(stats, "document_count")], [text.governanceWarningCount, index ? warnings.length : undefined]]} />
+        </section>
+      )}
     </main>
   );
 }

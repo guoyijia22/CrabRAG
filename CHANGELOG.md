@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1 - 2026-07-12
+
+- Replaced the duplicate full index-governance panel on the Knowledge Base page with a compact active-generation, document-count, and warning-count summary.
+- Added an in-app link from the compact summary to the dedicated Index Governance page while retaining its complete status and rollback controls.
+- Clarified that foreground sessions should stop with `Ctrl+C`, while `stop.bat` remains the verified administrative stop path for background, detached, recovery, backup, and restore workflows.
+
 ## 1.3.0 - 2026-07-12
 
 - Added replaceable OIDC/JWT identity verification with issuer, audience, signature, algorithm, expiry, not-before, and `kid` validation.

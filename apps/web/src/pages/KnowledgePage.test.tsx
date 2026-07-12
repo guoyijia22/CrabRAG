@@ -15,7 +15,7 @@ const indexStatus = {
 };
 
 describe("knowledge base and index governance", () => {
-  test("loads directory, schema suggestion and governed generation details without collection controls", async () => {
+  test("shows a compact governance summary and opens the full governance page", async () => {
     const fetchMock = mockApi({
       "/api/app-settings": appSettings,
       "/api/health": health,
@@ -28,15 +28,27 @@ describe("knowledge base and index governance", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "知识库" }));
+    expect(await screen.findByRole("heading", { name: "知识库", level: 1 })).not.toBeNull();
     expect(await screen.findByText("D:/docs")).not.toBeNull();
     expect(screen.getByText("ok:24")).not.toBeNull();
     expect(screen.getByText("gen-2")).not.toBeNull();
-    expect(screen.getByText("gen-1")).not.toBeNull();
-    expect(screen.getByText("18")).not.toBeNull();
-    expect(screen.getByText("1024")).not.toBeNull();
+    expect(screen.getByText("治理告警数")).not.toBeNull();
+    expect(screen.getByText("1")).not.toBeNull();
+    expect(screen.queryByText("上一索引代")).toBeNull();
+    expect(screen.queryByText("调度器")).toBeNull();
+    expect(screen.queryByText("检索缓存")).toBeNull();
+    expect(screen.queryByText("清理状态")).toBeNull();
+    expect(screen.queryByRole("button", { name: "回滚到上一代" })).toBeNull();
     expect(screen.getByText("风险等级")).not.toBeNull();
     expect(screen.queryByText("知识库集合")).toBeNull();
     expect(screen.queryByText("Knowledge base collection")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "查看索引治理" }));
+    expect(await screen.findByRole("heading", { name: "索引治理", level: 1 })).not.toBeNull();
+    expect(screen.getByText("gen-1")).not.toBeNull();
+    expect(screen.getByText("18")).not.toBeNull();
+    expect(screen.getByText("1024")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "回滚到上一代" })).not.toBeNull();
   });
 
   test("starts incremental and confirmed full rebuilds, reads result, confirms schema and rolls back", async () => {
@@ -67,6 +79,7 @@ describe("knowledge base and index governance", () => {
     expect(confirm).toHaveBeenCalledOnce();
     expect(await screen.findByText("gen-4")).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "确认图谱结构" }));
+    await user.click(screen.getByRole("button", { name: "查看索引治理" }));
     await user.click(screen.getByRole("button", { name: "回滚到上一代" }));
 
     await waitFor(() => {
@@ -89,6 +102,26 @@ describe("knowledge base and index governance", () => {
 
     expect(await screen.findByText("需要索引管理权限")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "回滚到上一代" })).toBeNull();
+    expect(screen.getByRole("button", { name: "查看索引治理" })).not.toBeNull();
+    expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("localizes the compact governance summary in English", async () => {
+    vi.stubGlobal("fetch", mockApi({
+      "/api/health": health,
+      "/api/ingest/active": { active: null, last_success: null },
+      "/api/graph/schema/suggestion": { status: "idle" },
+      "/api/index/status": indexStatus,
+    }));
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "English" }));
+    await user.click(screen.getByRole("button", { name: "Knowledge Base" }));
+
+    expect(await screen.findByText("Governance warning count")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "View index governance" })).not.toBeNull();
+    expect(screen.queryByText("Previous generation")).toBeNull();
   });
 
   test("reports polling failures instead of leaving an unhandled watcher", async () => {

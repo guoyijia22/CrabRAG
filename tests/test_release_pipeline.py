@@ -146,6 +146,15 @@ def test_release_installer_and_stop_scripts_do_not_depend_on_excluded_developmen
     assert "data\\run.json" in Path("scripts/stop.ps1").read_text(encoding="utf-8")
 
 
+def test_readme_explains_foreground_and_administrative_shutdown():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "Press `Ctrl+C` in the foreground launcher" in readme
+    assert "Do not rely on closing the terminal window" in readme
+    assert ".\\stop.bat" in readme
+    assert "background" in readme and "backup or restore" in readme
+
+
 def test_transformers_is_pinned_and_importable_with_bun():
     package = json.loads(Path("package.json").read_text(encoding="utf-8"))
     assert package["dependencies"]["@huggingface/transformers"] == "4.0.0-next.11"

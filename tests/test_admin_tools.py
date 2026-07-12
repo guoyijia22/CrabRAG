@@ -397,6 +397,15 @@ def test_run_scripts_publish_project_scoped_runtime_state():
     assert "start_identity" in powershell and "start_identity" in shell
 
 
+def test_windows_foreground_runner_cleans_up_children_and_runtime_state():
+    powershell = Path("run.ps1").read_text(encoding="utf-8")
+
+    assert "while ($true)" in powershell
+    assert "finally" in powershell
+    assert "Stop-Process -Id $process.Id" in powershell
+    assert "Remove-Item -LiteralPath $RunStatePath" in powershell
+
+
 def test_restore_rejects_symlink_or_reparse_point_in_target_ancestors(tmp_path: Path, monkeypatch):
     from scripts import crabrag_admin
 
